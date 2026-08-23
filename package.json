@@ -1,0 +1,27 @@
+{
+  "name": "focus-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt --browser firefox --mv3",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "wxt build --browser firefox --mv3"
+  },
+  "dependencies": {
+    "@wxt-dev/module-react": "^1.1.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "wxt": "^0.20.11"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@types/webextension-polyfill": "^0.12.3",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
