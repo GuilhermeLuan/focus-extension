@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { BackgroundRequest, ExtensionState, StateResponse } from "../../src/domain/types";
+import type { BackgroundError, BackgroundRequest, ExtensionState, StateResponse } from "../../src/domain/types";
 import { createConfirmationModel, type ConfirmationModel } from "../../src/application/confirmation";
 import { getCancelSessionPresentation } from "../../src/application/cancellation";
 import { createHoldController, type HoldController } from "../../src/application/hold";
@@ -36,10 +36,25 @@ export type PopupProps = {
 
 const durationOptions = Array.from({ length: 36 }, (_, index) => (index + 1) * 5);
 const defaultClock = () => Date.now();
+type PopupErrorCode = BackgroundError | "UNEXPECTED";
+
+const profileRecoveryErrors = new Set<PopupErrorCode>([
+  "PROFILE_EMPTY",
+  "PROFILE_REQUIRED",
+  "PROFILE_NOT_FOUND",
+  "INVALID_DURATION",
+  "PRIVATE_PERMISSION_REQUIRED"
+]);
+
+const stateRecoveryErrors = new Set<PopupErrorCode>([
+  "SESSION_ALREADY_ACTIVE",
+  "NO_ACTIVE_SESSION",
+  "CANCEL_WINDOW_CLOSED"
+]);
 
 export function Popup({ adapter, clock = defaultClock }: PopupProps) {
   const [state, setState] = useState<ExtensionState>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<{ code: PopupErrorCode; message: string }>();
   const [now, setNow] = useState(() => clock());
   const [durationMinutes, setDurationMinutes] = useState(50);
   const [confirmation, setConfirmation] = useState<ConfirmationModel>();
@@ -48,10 +63,21 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
   const [isStarting, setIsStarting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [cancelWindowClosedForSession, setCancelWindowClosedForSession] = useState<string>();
+  const [statusAnnouncement, setStatusAnnouncement] = useState("");
   const holdRef = useRef<HoldController | undefined>(undefined);
   const cancellingRef = useRef(false);
+  const startingRef = useRef(false);
+  const retryActionRef = useRef<() => void | Promise<void>>(() => undefined);
+  const previousSessionRef = useRef<{ id: string; canCancel: boolean } | undefined>(undefined);
 
   const send = (request: BackgroundRequest): Promise<StateResponse> => adapter.runtime.sendMessage(request);
+
+  const clearError = () => setError(undefined);
+
+  const showError = (code: PopupErrorCode, retry?: () => void | Promise<void>) => {
+    setError({ code, message: popupErrorMessage(code) });
+    retryActionRef.current = retry ?? (() => void refresh());
+  };
 
   const refresh = async () => {
     try {
@@ -63,12 +89,12 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
           setDurationMinutes(durationOptions.includes(savedDuration) ? savedDuration : 50);
           setCancelWindowClosedForSession(undefined);
         }
-        setError(undefined);
+        clearError();
       } else {
-        setError(popupErrorMessage(response.error));
+        showError(response.error, refresh);
       }
     } catch {
-      setError(popupErrorMessage("STORAGE_ERROR"));
+      showError("UNEXPECTED", refresh);
     }
   };
 
@@ -107,6 +133,18 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
   const cancelPresentation = active && cancelWindowClosedForSession !== active.id
     ? getCancelSessionPresentation(active, now)
     : { canCancel: false as const };
+  useEffect(() => {
+    if (!active) return;
+    const canCancel = cancelPresentation.canCancel;
+    const previous = previousSessionRef.current;
+    if (!previous || previous.id !== active.id) {
+      setStatusAnnouncement(canCancel ? copy.announcements.started : copy.announcements.protected);
+    } else if (previous.canCancel && !canCancel) {
+      setStatusAnnouncement(copy.announcements.protected);
+    }
+    previousSessionRef.current = { id: active.id, canCancel };
+  }, [active?.id, active?.cancelAllowedUntil, cancelPresentation.canCancel, cancelWindowClosedForSession]);
+
   const selectedProfile = useMemo(
     () => state?.configuration.profiles.find((profile) => profile.id === state.configuration.lastSelectedProfileId)
       ?? state?.configuration.profiles[0],
@@ -125,29 +163,38 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
     const response = await send({ type: "SELECT_PROFILE", profileId });
     if (response.ok) {
       setState(response.data);
-      setError(undefined);
+      clearError();
     } else {
-      setError(popupErrorMessage(response.error));
+      showError(response.error, () => void selectProfile(profileId));
     }
   };
 
   const startSession = async () => {
-    if (!confirmation) return;
+    const currentConfirmation = confirmation;
+    if (!currentConfirmation || startingRef.current) return;
+    startingRef.current = true;
     setIsStarting(true);
     setHoldProgress(1);
-    const response = await send({
-      type: "START_SESSION",
-      profileId: confirmation.profileId,
-      durationMinutes: confirmation.durationMinutes
-    });
-    if (response.ok) {
-      setState(response.data);
-      setConfirmation(undefined);
+    try {
+      const response = await send({
+        type: "START_SESSION",
+        profileId: currentConfirmation.profileId,
+        durationMinutes: currentConfirmation.durationMinutes
+      });
+      if (response.ok) {
+        setState(response.data);
+        setConfirmation(undefined);
+        clearError();
+      } else {
+        showError(response.error, () => void startSession());
+      }
+    } catch {
+      showError("UNEXPECTED", () => void startSession());
+    } finally {
+      startingRef.current = false;
       setIsStarting(false);
-      setError(undefined);
-    } else {
-      setIsStarting(false);
-      setError(popupErrorMessage(response.error));
+      if (startingRef.current) return;
+      if (state?.activeSession) return;
       setHoldProgress(0);
       holdRef.current?.dispose();
       holdRef.current = undefined;
@@ -165,16 +212,17 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
       if (response.ok) {
         setState(response.data);
         setCancelWindowClosedForSession(undefined);
-        setError(undefined);
+        setStatusAnnouncement(copy.announcements.cancelled);
+        clearError();
       } else if (response.error === "CANCEL_WINDOW_CLOSED") {
-        await refresh();
         setCancelWindowClosedForSession(current.id);
-        setError(popupErrorMessage(response.error));
+        setStatusAnnouncement(copy.announcements.protected);
+        showError(response.error, refresh);
       } else {
-        setError(popupErrorMessage(response.error));
+        showError(response.error, refresh);
       }
     } catch {
-      setError(popupErrorMessage("STORAGE_ERROR"));
+      showError("UNEXPECTED", () => void cancelSession());
     } finally {
       cancellingRef.current = false;
       setIsCancelling(false);
@@ -210,7 +258,8 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
 
   const enterConfirmation = () => {
     if (!selectedProfile) return;
-    setError(undefined);
+    clearError();
+    setStatusAnnouncement(copy.announcements.review);
     setConfirmation(createConfirmationModel(selectedProfile, durationMinutes, clock()));
   };
 
@@ -219,7 +268,7 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
       const tabs = await adapter.tabs.query({ active: true, currentWindow: true });
       const url = tabs[0]?.url;
       if (!url) {
-        setError(popupErrorMessage("URL_UNAVAILABLE"));
+        showError("URL_UNAVAILABLE", blockCurrentSite);
         return;
       }
       let response = await send({ type: "BLOCK_CURRENT_SITE", url });
@@ -236,12 +285,12 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
       }
       if (response.ok) {
         setState(response.data);
-        setError(undefined);
+        clearError();
       } else {
-        setError(popupErrorMessage(response.error));
+        showError(response.error, blockCurrentSite);
       }
     } catch {
-      setError(popupErrorMessage("STORAGE_ERROR"));
+      showError("UNEXPECTED", blockCurrentSite);
     }
   };
 
@@ -250,8 +299,30 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
     adapter.close();
   };
 
+  const errorRecovery = error
+    ? profileRecoveryErrors.has(error.code)
+      ? { label: copy.recoveries.recoverProfiles, action: openOptions }
+      : stateRecoveryErrors.has(error.code)
+        ? { label: copy.recoveries.refreshState, action: refresh }
+        : { label: copy.recoveries.retry, action: () => retryActionRef.current() }
+    : undefined;
+
+  const cancelSeconds = active
+    ? Math.ceil(Math.max(0, active.cancelAllowedUntil - now) / 1000)
+    : 0;
+  const errorPanel = error ? (
+    <div className="error-panel">
+      <p className="error-message" role="alert">{error.message}</p>
+      {errorRecovery && (
+        <button className="secondary error-recovery" type="button" onClick={() => void errorRecovery.action()}>
+          {errorRecovery.label}
+        </button>
+      )}
+    </div>
+  ) : null;
+
   return (
-    <main className="popup" aria-live="polite">
+    <main className="popup">
       <header className="popup-header">
         <div>
           <p className="eyebrow">{copy.brand}</p>
@@ -260,29 +331,37 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
         <span className="leaf" aria-hidden="true" />
       </header>
 
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{statusAnnouncement}</p>
+
       {!state && !error ? <p className="loading">{copy.loading}</p> : null}
+      {!state && error ? <section className="load-error" aria-label={copy.recoveries.loadLabel}>{errorPanel}</section> : null}
       {active ? (
         <section className="active" aria-label={copy.active.sectionLabel}>
+          {errorPanel}
+          <p className="active-kicker">{copy.active.sectionLabel}</p>
+          <p className="label">{copy.active.status}</p>
+          <p className="active-state"><strong>{cancelPresentation.canCancel ? copy.active.cancelable : copy.active.protected}</strong></p>
+          <p className="remaining">{remaining}</p>
+          <p className="active-end">{copy.active.endTime(formatEndTime(active.endsAt))}</p>
           <p className="label">{copy.active.profileLabel}</p>
           <p className="hostname"><strong>{active.profileSnapshot.name}</strong></p>
-          <ul className="host-list">
-            {active.profileSnapshot.domains.map((host) => <li key={host.canonicalHost}>{host.displayHost}</li>)}
-          </ul>
-          <button className="secondary" type="button" disabled>{copy.idle.blockCurrentSite}</button>
+          <p className="muted">{formatSiteCount(active.profileSnapshot.domains.length)}</p>
           {cancelPresentation.canCancel && (
-            <button className="secondary" type="button" disabled={isCancelling} onClick={() => void cancelSession()}>
-              {copy.active.cancel}
+            <button className="danger" type="button" disabled={isCancelling} onClick={() => void cancelSession()}>
+              {copy.active.cancel(cancelSeconds)}
             </button>
           )}
-          <p className="remaining">{remaining}</p>
-          <p className="muted">{copy.active.readOnly}</p>
+          {!cancelPresentation.canCancel && <p className="protected-note">{copy.active.protectedNote}</p>}
+          <p className="muted active-read-only">{copy.active.readOnly}</p>
         </section>
       ) : confirmation ? (
         <section className="confirmation" aria-label={copy.confirmation.sectionLabel}>
+          {errorPanel}
           <p className="label">{copy.confirmation.kicker}</p>
           <p className="summary-profile"><strong>{confirmation.profileName}</strong></p>
-          <p className="summary-line">{copy.confirmation.summary(confirmation.durationMinutes, formatEndTime(confirmation.endsAt))}</p>
           <p className="muted">{formatSiteCount(confirmation.hostnameCount)}</p>
+          <p className="summary-line">{copy.confirmation.summary(confirmation.durationMinutes)}</p>
+          <p className="summary-end">{copy.confirmation.endTime(formatEndTime(confirmation.endsAt))}</p>
           <p className="confirmation-note">{copy.confirmation.notice}</p>
           <button
             className="primary hold"
@@ -323,6 +402,7 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
         </section>
       ) : state ? (
         <section className="idle" aria-label={copy.idle.sectionLabel}>
+          {errorPanel}
           <div className="garden-time">
             <p className="quiet">{copy.idle.status}</p>
             <p className="time">{copy.idle.duration(durationMinutes)}</p>
@@ -362,7 +442,6 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
           </button>
         </section>
       ) : null}
-      {error && <p className="error" role="alert">{error}</p>}
     </main>
   );
 }

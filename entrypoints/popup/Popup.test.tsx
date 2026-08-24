@@ -3,7 +3,7 @@ import React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackgroundRequest, ExtensionState, StateResponse } from "../../src/domain/types";
+import type { ActiveSession, BackgroundRequest, ExtensionState, StateResponse } from "../../src/domain/types";
 import { Popup, type PopupAdapter } from "./Popup";
 
 // React 19 uses this flag to enable its async act() implementation in jsdom.
@@ -40,7 +40,9 @@ function createState(): ExtensionState {
   };
 }
 
-function renderPopup(state = createState()) {
+type ResponseFor = (request: BackgroundRequest, state: ExtensionState) => Promise<StateResponse> | StateResponse | undefined;
+
+function renderPopup(state = createState(), responseFor?: ResponseFor, clock: () => number = () => NOW) {
   const requests: BackgroundRequest[] = [];
   const listeners = new Set<(changes: Record<string, unknown>) => void>();
   const adapter: PopupAdapter = {
@@ -50,6 +52,8 @@ function renderPopup(state = createState()) {
         if (request.type === "SELECT_PROFILE") {
           state.configuration.lastSelectedProfileId = request.profileId;
         }
+        const customResponse = responseFor?.(request, state);
+        if (customResponse) return await customResponse;
         return { ok: true, data: state };
       }),
       openOptionsPage: vi.fn(async () => undefined)
@@ -71,10 +75,31 @@ function renderPopup(state = createState()) {
   document.body.append(container);
   const root = createRoot(container);
   act(() => {
-    root.render(<Popup adapter={adapter} clock={() => NOW} />);
+    root.render(<Popup adapter={adapter} clock={clock} />);
   });
 
   return { adapter, container, requests, root, listeners };
+}
+
+function createActiveSession(overrides: Partial<ActiveSession> = {}): ActiveSession {
+  return {
+    schemaVersion: 1,
+    id: "session-1",
+    startedAt: NOW,
+    cancelAllowedUntil: NOW + 60_000,
+    endsAt: NOW + 50 * 60_000,
+    durationMinutes: 50,
+    profileSnapshot: {
+      id: "focus",
+      name: "Foco profundo",
+      domains: createState().configuration.profiles[0].domains
+    },
+    ...overrides
+  };
+}
+
+function createActiveState(session = createActiveSession()): ExtensionState {
+  return { ...createState(), activeSession: session };
 }
 
 async function settle() {
@@ -169,7 +194,7 @@ describe("Popup idle seam", () => {
       button(rendered.container, "Revisar e começar").click();
       await Promise.resolve();
     });
-    expect(rendered.container.textContent).toContain("Confira antes de iniciar");
+    expect(rendered.container.textContent).toContain("Revisão da sessão");
     expect(rendered.requests.some((request) => request.type === "START_SESSION")).toBe(false);
   });
 
@@ -187,5 +212,252 @@ describe("Popup idle seam", () => {
 
     expect(rendered.container.textContent).toContain("65 min");
     expect(rendered.container.textContent).toContain("Termina às 11:20");
+  });
+});
+
+describe("Popup confirmation and active-session seam", () => {
+  let mounted: { root: Root } | undefined;
+
+  afterEach(() => {
+    if (mounted) act(() => mounted?.root.unmount());
+    mounted = undefined;
+    vi.useRealTimers();
+  });
+
+  it("orders the confirmation summary and snapshots its end time when opened", async () => {
+    let now = NOW;
+    const rendered = renderPopup(createState(), undefined, () => now);
+    mounted = rendered;
+    await settle();
+
+    await act(async () => {
+      now = NOW + 37_000;
+      button(rendered.container, "Revisar e começar").click();
+      await Promise.resolve();
+    });
+
+    const confirmation = rendered.container.querySelector(".confirmation");
+    expect(confirmation).toBeTruthy();
+    expect(confirmation?.textContent).toContain("Revisão da sessão");
+    expect(confirmation?.textContent).toContain("Foco profundo");
+    expect(confirmation?.textContent).toContain("2 sites");
+    expect(confirmation?.textContent).toContain("50 minutos");
+    expect(confirmation?.textContent).toContain("Termina às 11:05");
+    expect(confirmation?.textContent).toContain("60 segundos");
+    expect(tabbableNames(rendered.container)).toEqual([
+      "Mantenha pressionado por 2 segundos",
+      "Voltar"
+    ]);
+    expect(rendered.container.querySelector('[role="status"]')?.textContent).toBe("Revisão da sessão");
+  });
+
+  it("requires a continuous two-second primary-pointer hold and sends one start command", async () => {
+    vi.useFakeTimers();
+    let now = NOW;
+    const pending = new Promise<StateResponse>(() => undefined);
+    const rendered = renderPopup(createState(), (request) => {
+      if (request.type === "START_SESSION") return pending;
+      return undefined;
+    }, () => now);
+    mounted = rendered;
+    await settle();
+
+    await act(async () => {
+      button(rendered.container, "Revisar e começar").click();
+      await Promise.resolve();
+    });
+    const hold = button(rendered.container, "Mantenha pressionado por 2 segundos");
+    hold.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    now = NOW + 1_999;
+    await act(async () => {
+      vi.advanceTimersByTime(1_999);
+      await Promise.resolve();
+    });
+    expect(rendered.requests.filter((request) => request.type === "START_SESSION")).toHaveLength(0);
+    expect(hold.disabled).toBe(false);
+
+    now = NOW + 2_000;
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+    expect(rendered.requests.filter((request) => request.type === "START_SESSION")).toEqual([{
+      type: "START_SESSION",
+      profileId: "focus",
+      durationMinutes: 50
+    }]);
+    expect(button(rendered.container, "Iniciando…").disabled).toBe(true);
+
+    hold.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    hold.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    expect(rendered.requests.filter((request) => request.type === "START_SESSION")).toHaveLength(1);
+  });
+
+  it("keeps a cancellable active session compact and formats the cancellation countdown", async () => {
+    vi.useFakeTimers();
+    let now = NOW + 59_999;
+    const session = createActiveSession({
+      cancelAllowedUntil: NOW + 60_000,
+      endsAt: NOW + 50 * 60_000
+    });
+    const rendered = renderPopup(createActiveState(session), undefined, () => now);
+    mounted = rendered;
+    await settle();
+
+    expect(rendered.container.textContent).toContain("Sessão ativa");
+    expect(rendered.container.textContent).toContain("49m 01s");
+    expect(rendered.container.textContent).toContain("Termina às 11:05");
+    expect(rendered.container.textContent).toContain("Foco profundo");
+    expect(rendered.container.textContent).toContain("2 sites");
+    expect(rendered.container.textContent).toContain("Você ainda pode cancelar");
+    expect(rendered.container.textContent).toContain("Cancelar sessão · 1s");
+    expect(rendered.container.textContent).not.toContain("example.com");
+    expect(rendered.container.querySelector('[role="status"]')?.textContent).toBe(
+      "Sessão iniciada. Você ainda pode cancelar"
+    );
+  });
+
+  it("cancels before the strict deadline and announces the semantic transition", async () => {
+    let now = NOW + 59_000;
+    const idle = createState();
+    const state = createActiveState(createActiveSession({ cancelAllowedUntil: NOW + 60_000 }));
+    const rendered = renderPopup(state, (request) => {
+      if (request.type === "CANCEL_SESSION") return { ok: true, data: idle };
+      return undefined;
+    }, () => now);
+    mounted = rendered;
+    await settle();
+
+    await act(async () => {
+      button(rendered.container, "Cancelar sessão · 1s").click();
+      await Promise.resolve();
+    });
+    expect(rendered.requests).toContainEqual({ type: "CANCEL_SESSION" });
+    expect(rendered.container.textContent).toContain("Pronto para focar");
+    expect(rendered.container.querySelector('[role="status"]')?.textContent).toBe("Sessão cancelada");
+  });
+
+  it("removes cancellation at the exact boundary and announces protection", async () => {
+    vi.useFakeTimers();
+    let now = NOW + 59_000;
+    const session = createActiveSession({ cancelAllowedUntil: NOW + 60_000 });
+    const rendered = renderPopup(createActiveState(session), undefined, () => now);
+    mounted = rendered;
+    await settle();
+
+    now = NOW + 60_000;
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+    });
+    expect(rendered.container.textContent).toContain("Sessão protegida");
+    expect(rendered.container.textContent).toContain("não pode mais ser cancelado");
+    expect(rendered.container.textContent).not.toContain("Cancelar sessão");
+    expect(rendered.container.querySelector('[role="status"]')?.textContent).toBe("Sessão protegida");
+    expect(tabbableNames(rendered.container)).toEqual([]);
+  });
+
+  it("turns a concurrent CANCEL_WINDOW_CLOSED response into protected state without a stale action", async () => {
+    const state = createActiveState(createActiveSession());
+    const rendered = renderPopup(state, (request) => {
+      if (request.type === "CANCEL_SESSION") return { ok: false, error: "CANCEL_WINDOW_CLOSED" };
+      return undefined;
+    });
+    mounted = rendered;
+    await settle();
+
+    await act(async () => {
+      button(rendered.container, "Cancelar sessão · 60s").click();
+      await Promise.resolve();
+    });
+    expect(rendered.container.textContent).toContain("Sessão protegida");
+    expect(rendered.container.textContent).toContain("A janela de cancelamento terminou.");
+    expect(rendered.container.textContent).not.toContain("Cancelar sessão");
+    expect(button(rendered.container, "Atualizar estado")).toBeTruthy();
+  });
+});
+
+describe("Popup recovery seam", () => {
+  let mounted: { root: Root } | undefined;
+
+  afterEach(() => {
+    if (mounted) act(() => mounted?.root.unmount());
+    mounted = undefined;
+    vi.useRealTimers();
+  });
+
+  it("offers a standalone retry panel when the initial state load fails", async () => {
+    let first = true;
+    const state = createState();
+    const rendered = renderPopup(state, (request) => {
+      if (request.type === "GET_STATE" && first) {
+        first = false;
+        return { ok: false, error: "STORAGE_ERROR" };
+      }
+      return undefined;
+    });
+    mounted = rendered;
+    await settle();
+
+    expect(rendered.container.textContent).toContain("Não foi possível carregar o Focus Lock.");
+    expect(tabbableNames(rendered.container)).toEqual(["Tentar novamente"]);
+    await act(async () => {
+      button(rendered.container, "Tentar novamente").click();
+      await Promise.resolve();
+    });
+    expect(rendered.container.textContent).toContain("Pronto para focar");
+  });
+
+  it("maps profile/configuration start errors to profile care without changing the error code", async () => {
+    vi.useFakeTimers();
+    let now = NOW;
+    const rendered = renderPopup(createState(), (request) => {
+      if (request.type === "START_SESSION") return { ok: false, error: "PROFILE_EMPTY" };
+      return undefined;
+    }, () => now);
+    mounted = rendered;
+    await settle();
+    await act(async () => {
+      button(rendered.container, "Revisar e começar").click();
+      await Promise.resolve();
+    });
+    const hold = button(rendered.container, "Mantenha pressionado por 2 segundos");
+    hold.focus();
+    hold.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    now = NOW + 2_000;
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(rendered.requests).toContainEqual({ type: "START_SESSION", profileId: "focus", durationMinutes: 50 });
+    expect(rendered.container.textContent).toContain("Adicione pelo menos uma regra antes de iniciar.");
+    expect(button(rendered.container, "Cuidar dos perfis")).toBeTruthy();
+    await act(async () => {
+      button(rendered.container, "Cuidar dos perfis").click();
+      await Promise.resolve();
+    });
+    expect(rendered.adapter.runtime.openOptionsPage).toHaveBeenCalledOnce();
+  });
+
+  it("offers a state refresh for a closed cancellation window", async () => {
+    const state = createActiveState(createActiveSession());
+    const rendered = renderPopup(state, (request) => {
+      if (request.type === "CANCEL_SESSION") return { ok: false, error: "CANCEL_WINDOW_CLOSED" };
+      return undefined;
+    });
+    mounted = rendered;
+    await settle();
+    await act(async () => {
+      button(rendered.container, "Cancelar sessão · 60s").click();
+      await Promise.resolve();
+    });
+    expect(tabbableNames(rendered.container)).toEqual(["Atualizar estado"]);
+    await act(async () => {
+      button(rendered.container, "Atualizar estado").click();
+      await Promise.resolve();
+    });
+    expect(rendered.requests.filter((request) => request.type === "GET_STATE")).toHaveLength(2);
   });
 });

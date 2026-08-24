@@ -8,6 +8,8 @@
   --color-action: #53684e;
   --color-action-strong: #43583f;
   --color-danger: #963f35;
+  --color-danger-text: #7d3028;
+  --color-danger-contrast: #fffaf1;
   /* Opaque component boundary: >=3:1 against both light surfaces. */
   --color-border: #73756e;
   --color-focus: #315f2e;
@@ -41,6 +43,8 @@
     --color-action: #9bb092;
     --color-action-strong: #b7d1ae;
     --color-danger: #e18a7c;
+    --color-danger-text: #e18a7c;
+    --color-danger-contrast: #1f211d;
     /* Opaque component boundary: >=3:1 against both dark surfaces. */
     --color-border: #727a6c;
     --color-focus: #b7d8a9;

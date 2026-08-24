@@ -17,9 +17,10 @@ export const presentationCopy = {
     manageProfiles: "Cuidar dos perfis"
   },
   confirmation: {
-    sectionLabel: "Resumo da sessão",
-    kicker: "Confira antes de iniciar",
-    summary: (minutes: number, endTime: string) => `${minutes} minutos · termina às ${endTime}`,
+    sectionLabel: "Revisão da sessão",
+    kicker: "Revisão da sessão",
+    summary: (minutes: number) => `${minutes} minutos`,
+    endTime: (time: string) => `Termina às ${time}`,
     hold: "Mantenha pressionado por 2 segundos",
     starting: "Iniciando…",
     back: "Voltar",
@@ -27,9 +28,20 @@ export const presentationCopy = {
   },
   active: {
     sectionLabel: "Sessão ativa",
+    status: "Estado da sessão",
     profileLabel: "Perfil em foco",
     readOnly: "As regras ficam somente para leitura durante a sessão.",
-    cancel: "Cancelar sessão"
+    cancelable: "Você ainda pode cancelar",
+    protected: "Sessão protegida",
+    protectedNote: "O compromisso não pode mais ser cancelado.",
+    cancel: (seconds: number) => `Cancelar sessão · ${seconds}s`,
+    endTime: (time: string) => `Termina às ${time}`
+  },
+  announcements: {
+    review: "Revisão da sessão",
+    started: "Sessão iniciada. Você ainda pode cancelar",
+    protected: "Sessão protegida",
+    cancelled: "Sessão cancelada"
   },
   errors: {
     INVALID_HOSTNAME: "Informe um hostname ou URL HTTP(S) válido.",
@@ -57,6 +69,12 @@ export const presentationCopy = {
     UNSUPPORTED_BACKUP_VERSION: "A versão deste backup não é compatível.",
     CONFIGURATION_CHANGED: "A configuração mudou. Tente novamente."
   } satisfies Partial<Record<BackgroundError, string>>,
+  recoveries: {
+    loadLabel: "Erro ao carregar",
+    recoverProfiles: "Cuidar dos perfis",
+    refreshState: "Atualizar estado",
+    retry: "Tentar novamente"
+  },
   prompts: {
     consolidation: (hosts: string) => `Esta regra absorve ${hosts}. Continuar?`
   },

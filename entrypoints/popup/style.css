@@ -11,6 +11,7 @@ body,
   height: 520px;
   min-width: 0;
   margin: 0;
+  overflow: hidden;
 }
 
 html,
@@ -118,6 +119,17 @@ h1 {
   text-align: center;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
 .idle,
 .confirmation,
 .active {
@@ -222,6 +234,12 @@ button.secondary {
   background: color-mix(in srgb, var(--color-surface-raised) 70%, transparent);
 }
 
+button.danger {
+  border: 1px solid var(--color-danger);
+  background: var(--color-danger);
+  color: var(--color-danger-contrast);
+}
+
 .options-link {
   margin-top: 5px;
   background: transparent;
@@ -233,10 +251,15 @@ button.secondary {
 .active,
 .confirmation {
   margin-top: 24px;
+  overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: 37px 12px 37px 12px;
   background: color-mix(in srgb, var(--color-surface-raised) 75%, transparent);
   padding: 20px;
+}
+
+.active {
+  height: 392px;
 }
 
 .hostname {
@@ -245,25 +268,53 @@ button.secondary {
   font-size: 18px;
 }
 
-.host-list {
-  max-height: 100px;
-  margin: 10px 0 0;
-  overflow: auto;
-  padding-left: 18px;
+.remaining {
+  margin: 20px 0 4px;
+  font-family: var(--font-serif);
+  font-variant-numeric: tabular-nums;
+  font-size: 48px;
+  min-width: 8ch;
+  letter-spacing: -0.05em;
+  line-height: 1;
+}
+
+.active-state,
+.active-end,
+.active-kicker,
+.summary-end {
+  margin: 0;
   font-family: var(--font-sans);
   font-size: 12px;
 }
 
-.host-list li + li {
-  margin-top: 4px;
+.active-kicker {
+  margin-bottom: 7px;
+  color: var(--color-text-muted);
+  font-weight: 650;
 }
 
-.remaining {
-  margin: 20px 0 4px;
-  font-family: var(--font-serif);
-  font-size: 32px;
+.active-state {
+  margin-top: -4px;
+  color: var(--color-text-muted);
+}
+
+.active-end {
+  margin: 4px 0 20px;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.05em;
+}
+
+.active-read-only {
+  margin-top: 14px;
+}
+
+.protected-note {
+  margin: 18px 0 0;
+  border-left: 3px solid var(--color-action);
+  background: var(--color-surface-raised);
+  padding: 9px 11px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .confirmation {
@@ -276,9 +327,14 @@ button.secondary {
 }
 
 .summary-line {
-  margin: 0 0 9px;
+  margin: 0 0 4px;
   font-family: var(--font-sans);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-end {
+  margin: 0 0 9px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -311,15 +367,37 @@ button.secondary {
   position: relative;
 }
 
-.error {
-  position: absolute;
-  right: 30px;
-  bottom: 9px;
-  left: 30px;
+.error-panel {
+  position: relative;
+  z-index: 2;
+  margin: -8px 0 12px;
+  border-left: 3px solid var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface-raised));
+  padding: 9px 11px;
+}
+
+.error-message {
   margin: 0;
-  color: var(--color-danger);
+  color: var(--color-danger-text);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.error-recovery {
+  margin-top: 8px;
+  min-height: 34px;
+  padding: 7px 11px;
+}
+
+.load-error {
+  position: relative;
+  z-index: 1;
+  margin-top: 150px;
+}
+
+.load-error .error-panel {
+  margin: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
