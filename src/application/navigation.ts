@@ -40,13 +40,17 @@ export function decideNavigation(
 export class NavigationGuard {
   public constructor(
     private readonly readState: () => Promise<{ activeSession?: ActiveSession }>,
-    private readonly blockedPageUrl: string
+    private readonly blockedPageUrl: string,
+    private readonly now: () => number = () => Date.now()
   ) {}
 
   public async decide(request: NavigationRequest): Promise<NavigationDecision> {
     try {
       const state = await this.readState();
-      return decideNavigation(request, state.activeSession, this.blockedPageUrl);
+      const activeSession = state.activeSession && state.activeSession.endsAt > this.now()
+        ? state.activeSession
+        : undefined;
+      return decideNavigation(request, activeSession, this.blockedPageUrl);
     } catch {
       return { type: "allow" };
     }

@@ -20,7 +20,19 @@ import {
   type ExtensionState,
   type StoredConfiguration
 } from "../domain/types";
-import { StateStore, type Clock } from "./storage";
+import {
+  StateStore,
+  type Clock
+} from "./storage";
+
+export type CompletionNotificationOptions = {
+  title: "Pomodoro concluído";
+  message: string;
+};
+
+export type CompletionNotifier = {
+  show(id: string, options: CompletionNotificationOptions): Promise<void>;
+};
 
 export type ServiceOptions = {
   now?: Clock;
@@ -29,6 +41,7 @@ export type ServiceOptions = {
   isAllowedIncognitoAccess?: () => Promise<boolean>;
   indicator?: ActionIndicator;
   existingTabs?: ExistingTabsAdapter;
+  notifier?: CompletionNotifier;
 };
 
 export type AlarmScheduler = {
@@ -58,6 +71,18 @@ const noIndicator: ActionIndicator = {
 const noExistingTabs: ExistingTabsAdapter = {
   async scan() {}
 };
+
+const noNotifier: CompletionNotifier = {
+  async show() {
+    throw new Error("completion notifier unavailable");
+  }
+};
+
+export const COMPLETION_NOTIFICATION_TITLE = "Pomodoro concluído" as const;
+
+export function completionNotificationId(sessionId: string): string {
+  return `pomodoro-completed:${sessionId}`;
+}
 
 function cloneProfile(profile: BlockingProfile): BlockingProfile {
   return {
@@ -113,6 +138,7 @@ export class BackgroundService {
   private readonly isAllowedIncognitoAccess: () => Promise<boolean>;
   private readonly indicator: ActionIndicator;
   private readonly existingTabs: ExistingTabsAdapter;
+  private readonly notifier: CompletionNotifier;
   private requestQueue: Promise<void> = Promise.resolve();
 
   public constructor(
@@ -125,6 +151,7 @@ export class BackgroundService {
     this.isAllowedIncognitoAccess = options.isAllowedIncognitoAccess ?? (async () => true);
     this.indicator = options.indicator ?? noIndicator;
     this.existingTabs = options.existingTabs ?? noExistingTabs;
+    this.notifier = options.notifier ?? noNotifier;
   }
 
   public handle(request: { type: "EXPORT_CONFIGURATION" }): Promise<BackgroundResponse<ExportConfigurationData>>;
@@ -149,7 +176,7 @@ export class BackgroundService {
     try {
       if (request.type === "GET_STATE") {
         const state = await this.store.read(this.now());
-        await this.reconcileSessionResources(state);
+        await this.reconcileState(state);
         return { ok: true, data: state };
       }
       if (request.type === "EXPORT_CONFIGURATION") return await this.exportConfiguration();
@@ -179,7 +206,7 @@ export class BackgroundService {
   private async exportConfiguration(): Promise<BackgroundResponse<ExportConfigurationData>> {
     const currentTime = this.now();
     const state = await this.store.read(currentTime);
-    await this.reconcileSessionResources(state);
+    await this.reconcileState(state);
     return { ok: true, data: serializeConfigurationBackup(state.configuration, currentTime) };
   }
 
@@ -218,7 +245,7 @@ export class BackgroundService {
     if (name !== EXPIRATION_ALARM) return;
     try {
       const state = await this.store.read(this.now());
-      await this.reconcileSessionResources(state);
+      await this.reconcileState(state);
     } catch {
       // A later state read can retry reconciliation without blocking navigation.
     }
@@ -244,6 +271,28 @@ export class BackgroundService {
     // Storage is authoritative. Auxiliary browser APIs are derived state and
     // are retried by the next GET_STATE, startup reconciliation, or alarm.
     await Promise.allSettled([alarmEffect, indicatorEffect]);
+  }
+
+  private async reconcileState(state: ExtensionState): Promise<void> {
+    await this.reconcileSessionResources(state);
+    await this.deliverPendingCompletionNotification();
+  }
+
+  private async deliverPendingCompletionNotification(): Promise<void> {
+    const pending = await this.store.readPendingCompletionNotifications();
+    for (const notification of pending) {
+      const id = completionNotificationId(notification.sessionId);
+      try {
+        await this.notifier.show(id, {
+          title: COMPLETION_NOTIFICATION_TITLE,
+          message: "Seu período de foco terminou."
+        });
+        await this.store.removePendingCompletionNotification(notification.sessionId);
+      } catch {
+        // Keep the completion record for the next reconciliation when either
+        // notification creation or its acknowledgement cannot be completed.
+      }
+    }
   }
 
   private profileOrError(
@@ -484,7 +533,10 @@ export class BackgroundService {
     const currentTime = this.now();
     const state = await this.store.read(currentTime);
     const activeSession = state.activeSession;
-    if (!activeSession) return { ok: false, error: "NO_ACTIVE_SESSION" };
+    if (!activeSession) {
+      if ((await this.store.readPendingCompletionNotifications()).length) await this.reconcileState(state);
+      return { ok: false, error: "NO_ACTIVE_SESSION" };
+    }
     if (currentTime >= activeSession.cancelAllowedUntil) {
       return { ok: false, error: "CANCEL_WINDOW_CLOSED" };
     }

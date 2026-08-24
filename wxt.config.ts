@@ -8,7 +8,7 @@ export default defineConfig({
     action: {
       default_icon: "icon-inactive.svg"
     },
-    permissions: ["storage", "alarms", "webRequest", "webRequestBlocking", "activeTab"],
+    permissions: ["storage", "alarms", "notifications", "webRequest", "webRequestBlocking", "activeTab"],
     host_permissions: ["http://*/*", "https://*/*"],
     browser_specific_settings: {
       gecko: {

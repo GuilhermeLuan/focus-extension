@@ -3,6 +3,7 @@ import { ExistingTabsScanner } from "../src/application/existing-tabs";
 import { NavigationGuard } from "../src/application/navigation";
 import { BackgroundService } from "../src/application/service";
 import type { ActionIndicator } from "../src/application/service";
+import type { CompletionNotifier } from "../src/application/service";
 import { StateStore, type StorageArea } from "../src/application/storage";
 import type { BackgroundRequest } from "../src/domain/types";
 
@@ -22,6 +23,17 @@ const actionIndicator: ActionIndicator = {
   setInactive: () => browser.action.setIcon({ path: browser.runtime.getURL("/icon-inactive.svg") })
 };
 
+const completionNotifier: CompletionNotifier = {
+  show: async (id, options) => {
+    await browser.notifications.create(id, {
+      type: "basic",
+      title: options.title,
+      message: options.message,
+      iconUrl: browser.runtime.getURL("/icon-inactive.svg")
+    });
+  }
+};
+
 const store = new StateStore(storage);
 
 export default defineBackground(() => {
@@ -36,6 +48,7 @@ export default defineBackground(() => {
   const service = new BackgroundService(store, {
     alarms,
     indicator: actionIndicator,
+    notifier: completionNotifier,
     isAllowedIncognitoAccess: () => browser.extension.isAllowedIncognitoAccess(),
     existingTabs
   });

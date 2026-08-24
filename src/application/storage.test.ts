@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { defaultConfiguration } from "../domain/types";
 import { StateStore, type StorageArea } from "./storage";
 
 function memoryStorage(initial: Record<string, unknown> = {}): StorageArea & { values: Record<string, unknown>; writes: Record<string, unknown>[] } {
@@ -184,5 +185,84 @@ describe("StateStore", () => {
     const state = await new StateStore(storage, () => 20_000).read();
     expect(state.activeSession).toMatchObject({ startedAt: 10_000, cancelAllowedUntil: 70_000 });
     expect(storage.writes).toHaveLength(1);
+  });
+
+  it("records an expired session completion before removing the active session", async () => {
+    const storage = memoryStorage({
+      configuration: defaultConfiguration(1),
+      activeSession: {
+        schemaVersion: 1,
+        id: "session-expired",
+        startedAt: 1_000,
+        cancelAllowedUntil: 61_000,
+        endsAt: 5_000,
+        durationMinutes: 5,
+        profileSnapshot: { id: "focus", name: "Foco", domains: [] }
+      }
+    });
+    const store = new StateStore(storage, () => 5_000);
+
+    await expect(store.read()).resolves.toEqual({ configuration: storage.values.configuration });
+    expect(storage.values.activeSession).toBeUndefined();
+    expect(storage.values.pendingCompletionNotification).toEqual({
+      schemaVersion: 1,
+      sessionId: "session-expired",
+      completedAt: 5_000
+    });
+
+    await store.read();
+    expect(storage.values.pendingCompletionNotification).toEqual({
+      schemaVersion: 1,
+      sessionId: "session-expired",
+      completedAt: 5_000
+    });
+  });
+
+  it("keeps an older pending completion while a newer session is active", async () => {
+    const storage = memoryStorage({
+      configuration: defaultConfiguration(1),
+      activeSession: {
+        schemaVersion: 1,
+        id: "session-new",
+        startedAt: 10_000,
+        cancelAllowedUntil: 70_000,
+        endsAt: 15_000,
+        durationMinutes: 5,
+        profileSnapshot: { id: "focus", name: "Foco", domains: [] }
+      },
+      pendingCompletionNotification: {
+        schemaVersion: 1,
+        sessionId: "session-old",
+        completedAt: 9_000
+      }
+    });
+    const store = new StateStore(storage, () => 10_000);
+
+    await store.read();
+    expect(storage.values.activeSession).toBeDefined();
+    expect(await store.readPendingCompletionNotifications()).toEqual([{
+      schemaVersion: 1,
+      sessionId: "session-old",
+      completedAt: 9_000
+    }]);
+
+    await store.read(15_000);
+    expect(storage.values.activeSession).toBeUndefined();
+    expect(await store.readPendingCompletionNotifications()).toEqual([
+      { schemaVersion: 1, sessionId: "session-old", completedAt: 9_000 },
+      { schemaVersion: 1, sessionId: "session-new", completedAt: 15_000 }
+    ]);
+  });
+
+  it("discards malformed pending completion data without reactivating a session", async () => {
+    const storage = memoryStorage({
+      configuration: defaultConfiguration(1),
+      pendingCompletionNotification: { schemaVersion: 99, sessionId: "bad", completedAt: "later" }
+    });
+    const store = new StateStore(storage, () => 5_000);
+
+    await expect(store.read()).resolves.toEqual({ configuration: storage.values.configuration });
+    expect(storage.values.pendingCompletionNotification).toBeUndefined();
+    expect(await store.readPendingCompletionNotifications()).toEqual([]);
   });
 });

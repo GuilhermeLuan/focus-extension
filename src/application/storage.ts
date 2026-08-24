@@ -16,6 +16,14 @@ export type StorageArea = {
 
 export type Clock = () => number;
 
+export type PendingCompletionNotification = {
+  schemaVersion: 1;
+  sessionId: string;
+  completedAt: number;
+};
+
+export const PENDING_COMPLETION_NOTIFICATION_KEY = "pendingCompletionNotification";
+
 function isValidDuration(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 5 && value <= 180 && value % 5 === 0;
 }
@@ -37,6 +45,50 @@ type LegacySession = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isPendingCompletionNotification(value: unknown): value is PendingCompletionNotification {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === 1 &&
+    typeof value.sessionId === "string" &&
+    value.sessionId.trim().length > 0 &&
+    typeof value.completedAt === "number" &&
+    Number.isFinite(value.completedAt)
+  );
+}
+
+function clonePendingCompletionNotification(
+  notification: PendingCompletionNotification
+): PendingCompletionNotification {
+  return {
+    schemaVersion: 1,
+    sessionId: notification.sessionId,
+    completedAt: notification.completedAt
+  };
+}
+
+function decodePendingCompletionNotifications(raw: unknown): {
+  notifications: PendingCompletionNotification[];
+  changed: boolean;
+} {
+  if (raw === undefined) return { notifications: [], changed: false };
+  const candidates = Array.isArray(raw) ? raw : [raw];
+  const notifications: PendingCompletionNotification[] = [];
+  let changed = false;
+  for (const candidate of candidates) {
+    if (!isPendingCompletionNotification(candidate)) {
+      changed = true;
+      continue;
+    }
+    if (notifications.some((notification) => notification.sessionId === candidate.sessionId)) {
+      changed = true;
+      continue;
+    }
+    notifications.push(clonePendingCompletionNotification(candidate));
+  }
+  if (Array.isArray(raw) && raw.length !== notifications.length) changed = true;
+  return { notifications, changed };
 }
 
 function cloneHost(host: BlockedHost): BlockedHost {
@@ -189,7 +241,7 @@ export class StateStore {
   ) {}
 
   public async read(currentTime = this.now()): Promise<ExtensionState> {
-    const raw = await this.storage.get(["configuration", "activeSession"]);
+    const raw = await this.storage.get(["configuration", "activeSession", PENDING_COMPLETION_NOTIFICATION_KEY]);
     const rawConfiguration = raw.configuration;
     let configuration: StoredConfiguration;
     let migrated = false;
@@ -228,12 +280,65 @@ export class StateStore {
       });
     }
 
+    const pendingState = decodePendingCompletionNotifications(raw[PENDING_COMPLETION_NOTIFICATION_KEY]);
+    const pendingCompletions = pendingState.notifications;
+    let pendingChanged = pendingState.changed;
+
     if (activeSession && activeSession.endsAt <= currentTime) {
+      const existingCompletion = pendingCompletions.find(
+        (notification) => notification.sessionId === activeSession.id
+      );
+      if (!existingCompletion) {
+        pendingCompletions.push({
+          schemaVersion: 1,
+          sessionId: activeSession.id,
+          completedAt: activeSession.endsAt
+        });
+        pendingChanged = true;
+      } else if (existingCompletion.completedAt !== activeSession.endsAt) {
+        existingCompletion.completedAt = activeSession.endsAt;
+        pendingChanged = true;
+      }
+      if (pendingChanged) {
+        await this.persistPendingCompletionNotifications(pendingCompletions);
+      }
       await this.storage.remove("activeSession");
       return { configuration };
     }
 
+    if (pendingChanged) {
+      await this.persistPendingCompletionNotifications(pendingCompletions);
+    }
+
     return activeSession ? { configuration, activeSession } : { configuration };
+  }
+
+  public async readPendingCompletionNotifications(): Promise<PendingCompletionNotification[]> {
+    const raw = await this.storage.get(PENDING_COMPLETION_NOTIFICATION_KEY);
+    const decoded = decodePendingCompletionNotifications(raw[PENDING_COMPLETION_NOTIFICATION_KEY]);
+    if (decoded.changed) await this.persistPendingCompletionNotifications(decoded.notifications);
+    return decoded.notifications;
+  }
+
+  public async readPendingCompletionNotification(): Promise<PendingCompletionNotification | undefined> {
+    return (await this.readPendingCompletionNotifications())[0];
+  }
+
+  public async removePendingCompletionNotification(sessionId: string): Promise<void> {
+    const pending = await this.readPendingCompletionNotifications();
+    const remaining = pending.filter((notification) => notification.sessionId !== sessionId);
+    if (remaining.length !== pending.length) await this.persistPendingCompletionNotifications(remaining);
+  }
+
+  private async persistPendingCompletionNotifications(
+    notifications: PendingCompletionNotification[]
+  ): Promise<void> {
+    if (!notifications.length) {
+      await this.storage.remove(PENDING_COMPLETION_NOTIFICATION_KEY);
+      return;
+    }
+    const value = notifications.length === 1 ? notifications[0] : notifications;
+    await this.storage.set({ [PENDING_COMPLETION_NOTIFICATION_KEY]: value });
   }
 
   public async saveConfiguration(configuration: StoredConfiguration): Promise<void> {

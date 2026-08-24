@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideNavigation, type NavigationRequest } from "./navigation";
+import { decideNavigation, NavigationGuard, type NavigationRequest } from "./navigation";
 import type { ActiveSession } from "../domain/types";
 
 const session: ActiveSession = {
@@ -65,5 +65,17 @@ describe("navigation decision", () => {
     expect(decideNavigation({ url: "http://127.0.0.1:3000", type: "main_frame" }, session, "moz-extension://focus/blocked.html").type).toBe("redirect");
     expect(decideNavigation({ url: "http://127.0.0.10", type: "main_frame" }, session, "moz-extension://focus/blocked.html")).toEqual({ type: "allow" });
     expect(decideNavigation({ url: "http://foo.localhost", type: "main_frame" }, session, "moz-extension://focus/blocked.html")).toEqual({ type: "allow" });
+  });
+});
+
+describe("navigation guard", () => {
+  it("does not preserve a session that is already at its end time", async () => {
+    const guard = new NavigationGuard(
+      async () => ({ activeSession: { ...session, endsAt: 5_000 } }),
+      "moz-extension://focus/blocked.html",
+      () => 5_000
+    );
+
+    await expect(guard.decide({ url: "https://youtube.com/", type: "main_frame" })).resolves.toEqual({ type: "allow" });
   });
 });
