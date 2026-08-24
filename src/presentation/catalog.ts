@@ -3,6 +3,69 @@ import type { BackgroundError } from "../domain/types";
 export const presentationCopy = {
   brand: "FOCUS LOCK",
   title: "Pomodoro",
+  options: {
+    sectionLabel: "Configurações do Focus Lock",
+    title: "Perfis de bloqueio",
+    intro: "Escolha regras por contexto. As alterações ficam disponíveis no próximo foco.",
+    profiles: {
+      navigationLabel: "Perfis",
+      listHeading: "Seus perfis",
+      selected: "Perfil selecionado",
+      count: (count: number) => formatSiteCount(count),
+      newProfileLabel: "Nome do novo perfil",
+      newProfilePlaceholder: "Trabalho",
+      create: "Criar perfil",
+      nameLabel: "Nome do perfil",
+      saveName: "Salvar nome",
+      delete: "Excluir perfil",
+      lastProfileNote: "Mantenha pelo menos um perfil.",
+      sessionReadOnly: "Este perfil está em uso pela sessão atual e permanece somente para leitura.",
+      deleteConfirmation: (name: string, count: number) =>
+        `Excluir o perfil “${name}” com ${formatSiteCount(count)}? Esta ação não pode ser desfeita.`
+    },
+    hosts: {
+      heading: "Sites bloqueados",
+      label: "Hostname ou URL",
+      placeholder: "youtube.com ou https://youtube.com",
+      help: "Aceita hostname ou URL HTTP(S). Caminho, porta e parâmetros são ignorados.",
+      add: "Adicionar site",
+      empty: "Nenhum site bloqueado neste perfil.",
+      remove: (host: string) => `Remover ${host}`,
+      consolidationLabel: "Consolidar regras",
+      consolidation: (hosts: string) => `Esta regra absorve: ${hosts}.`,
+      confirmConsolidation: "Consolidar e adicionar",
+      cancel: "Cancelar"
+    },
+    backup: {
+      sectionLabel: "Backup e restauração",
+      description: "Exporte sua configuração ou substitua todos os perfis por um backup Focus Lock.",
+      export: "Exportar configuração",
+      exporting: "Exportando…",
+      selectLabel: "Selecionar backup (.json)",
+      activeNote: "A restauração fica indisponível durante uma sessão ativa.",
+      summaryLabel: "Resumo do backup",
+      selected: "Backup selecionado",
+      exportedAt: "Exportado em",
+      profiles: "Perfis",
+      rules: "Regras",
+      selectedProfile: "Perfil selecionado",
+      duration: "Duração padrão",
+      durationValue: (minutes: number) => `${minutes} minutos`,
+      replace: "Substituir configuração",
+      replacing: "Substituindo…",
+      replaceConfirmation: "Substituirá todos os perfis e preferências locais pela configuração do backup. Deseja continuar?"
+    },
+    errors: {
+      fileRead: "Não foi possível ler o arquivo de backup.",
+      export: "Não foi possível exportar a configuração.",
+      import: "Não foi possível concluir a restauração; a configuração não foi substituída.",
+      configurationChanged: "A configuração mudou. Verifique o arquivo e tente novamente.",
+      importSessionActive: "Encerre a sessão atual antes de substituir a configuração.",
+      backupTooLarge: "O backup excede o limite de 1 MiB.",
+      invalidBackup: "O arquivo não é um backup Focus Lock válido.",
+      unsupportedBackupVersion: "A versão deste backup não é compatível."
+    }
+  },
   idle: {
     sectionLabel: "Sessão pronta",
     status: "Pronto para focar",
