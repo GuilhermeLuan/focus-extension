@@ -89,6 +89,22 @@ function button(container: HTMLElement, name: string): HTMLButtonElement {
   return found;
 }
 
+function select(container: HTMLElement, name: string): HTMLSelectElement {
+  const found = [...container.querySelectorAll("select")].find(
+    (candidate) => candidate.getAttribute("aria-label") === name
+  );
+  if (!(found instanceof HTMLSelectElement)) throw new Error(`Select not found: ${name}`);
+  return found;
+}
+
+function tabbableNames(container: HTMLElement): string[] {
+  return [...container.querySelectorAll<HTMLSelectElement | HTMLButtonElement>("select, button")]
+    .filter((control) => !control.disabled)
+    .map((control) => control instanceof HTMLSelectElement
+      ? control.getAttribute("aria-label") ?? ""
+      : control.textContent?.trim() ?? "");
+}
+
 afterEach(() => {
   document.body.replaceChildren();
 });
@@ -113,6 +129,13 @@ describe("Popup idle seam", () => {
     expect(button(rendered.container, "Bloquear este site")).toBeTruthy();
     expect(button(rendered.container, "Revisar e começar")).toBeTruthy();
     expect(button(rendered.container, "Cuidar dos perfis")).toBeTruthy();
+    expect(tabbableNames(rendered.container)).toEqual([
+      "Perfil",
+      "Duração",
+      "Bloquear este site",
+      "Revisar e começar",
+      "Cuidar dos perfis"
+    ]);
   });
 
   it("emits profile, current-site, and settings commands while keeping confirmation deliberate", async () => {
@@ -120,8 +143,7 @@ describe("Popup idle seam", () => {
     mounted = rendered;
     await settle();
 
-    const profile = rendered.container.querySelector<HTMLSelectElement>("#profile");
-    if (!profile) throw new Error("Profile select not found");
+    const profile = select(rendered.container, "Perfil");
     await act(async () => {
       profile.value = "reading";
       profile.dispatchEvent(new Event("change", { bubbles: true }));
@@ -156,8 +178,7 @@ describe("Popup idle seam", () => {
     mounted = rendered;
     await settle();
 
-    const duration = rendered.container.querySelector<HTMLSelectElement>("#duration");
-    if (!duration) throw new Error("Duration select not found");
+    const duration = select(rendered.container, "Duração");
     await act(async () => {
       duration.value = "65";
       duration.dispatchEvent(new Event("change", { bubbles: true }));

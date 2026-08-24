@@ -8,7 +8,8 @@
   --color-action: #53684e;
   --color-action-strong: #43583f;
   --color-danger: #963f35;
-  --color-border: rgba(36, 39, 32, 0.22);
+  /* Opaque component boundary: >=3:1 against both light surfaces. */
+  --color-border: #73756e;
   --color-focus: #315f2e;
   --color-focus-on-dark: #b7d8a9;
 
@@ -40,7 +41,8 @@
     --color-action: #9bb092;
     --color-action-strong: #b7d1ae;
     --color-danger: #e18a7c;
-    --color-border: rgba(238, 233, 220, 0.2);
+    /* Opaque component boundary: >=3:1 against both dark surfaces. */
+    --color-border: #727a6c;
     --color-focus: #b7d8a9;
   }
 }
