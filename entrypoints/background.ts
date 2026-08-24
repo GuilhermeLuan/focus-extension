@@ -1,4 +1,5 @@
 import { browser } from "wxt/browser";
+import { ExistingTabsScanner } from "../src/application/existing-tabs";
 import { NavigationGuard } from "../src/application/navigation";
 import { BackgroundService } from "../src/application/service";
 import type { ActionIndicator } from "../src/application/service";
@@ -22,14 +23,22 @@ const actionIndicator: ActionIndicator = {
 };
 
 const store = new StateStore(storage);
-const service = new BackgroundService(store, {
-  alarms,
-  indicator: actionIndicator,
-  isAllowedIncognitoAccess: () => browser.extension.isAllowedIncognitoAccess()
-});
 
 export default defineBackground(() => {
   const blockedPageUrl = browser.runtime.getURL("blocked.html" as never);
+  const existingTabs = new ExistingTabsScanner(
+    {
+      query: () => browser.tabs.query({}),
+      update: (tabId, updateProperties) => browser.tabs.update(tabId, updateProperties)
+    },
+    blockedPageUrl
+  );
+  const service = new BackgroundService(store, {
+    alarms,
+    indicator: actionIndicator,
+    isAllowedIncognitoAccess: () => browser.extension.isAllowedIncognitoAccess(),
+    existingTabs
+  });
   const navigation = new NavigationGuard(() => store.read(), blockedPageUrl);
 
   void service.handle({ type: "GET_STATE" });

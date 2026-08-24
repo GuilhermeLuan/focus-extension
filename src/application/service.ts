@@ -9,6 +9,7 @@ import {
   parseConfigurationBackup,
   serializeConfigurationBackup
 } from "./backup";
+import type { ExistingTabsAdapter } from "./existing-tabs";
 import {
   type ActiveSession,
   type BackgroundError,
@@ -27,6 +28,7 @@ export type ServiceOptions = {
   alarms?: AlarmScheduler;
   isAllowedIncognitoAccess?: () => Promise<boolean>;
   indicator?: ActionIndicator;
+  existingTabs?: ExistingTabsAdapter;
 };
 
 export type AlarmScheduler = {
@@ -51,6 +53,10 @@ const noAlarms: AlarmScheduler = {
 const noIndicator: ActionIndicator = {
   async setActive() {},
   async setInactive() {}
+};
+
+const noExistingTabs: ExistingTabsAdapter = {
+  async scan() {}
 };
 
 function cloneProfile(profile: BlockingProfile): BlockingProfile {
@@ -106,6 +112,7 @@ export class BackgroundService {
   private readonly alarms: AlarmScheduler;
   private readonly isAllowedIncognitoAccess: () => Promise<boolean>;
   private readonly indicator: ActionIndicator;
+  private readonly existingTabs: ExistingTabsAdapter;
   private requestQueue: Promise<void> = Promise.resolve();
 
   public constructor(
@@ -117,6 +124,7 @@ export class BackgroundService {
     this.alarms = options.alarms ?? noAlarms;
     this.isAllowedIncognitoAccess = options.isAllowedIncognitoAccess ?? (async () => true);
     this.indicator = options.indicator ?? noIndicator;
+    this.existingTabs = options.existingTabs ?? noExistingTabs;
   }
 
   public handle(request: { type: "EXPORT_CONFIGURATION" }): Promise<BackgroundResponse<ExportConfigurationData>>;
@@ -464,6 +472,11 @@ export class BackgroundService {
     await this.store.saveConfiguration(configuration);
     const nextState = { configuration, activeSession };
     await this.reconcileSessionResources(nextState);
+    try {
+      await this.existingTabs.scan(activeSession);
+    } catch {
+      // Existing tabs are best-effort. The persisted session remains authoritative.
+    }
     return { ok: true, data: nextState };
   }
 

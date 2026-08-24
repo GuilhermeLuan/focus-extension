@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { defaultConfiguration, type StoredConfiguration } from "../domain/types";
 import { serializeConfigurationBackup } from "./backup";
+import type { ExistingTabsAdapter } from "./existing-tabs";
 import { StateStore, type StorageArea } from "./storage";
 import { BackgroundService } from "./service";
 
@@ -411,6 +412,52 @@ describe("BackgroundService profiles and blocked hosts", () => {
     expect(storedSession.profileSnapshot.domains).not.toBe(storedConfiguration.profiles[0].domains);
     storedConfiguration.profiles[0].domains.push({ canonicalHost: "other.com", displayHost: "other.com", kind: "domain" });
     expect(storedSession.profileSnapshot.domains).toHaveLength(1);
+  });
+
+  it("persists the session before scanning existing tabs and passes the saved snapshot", async () => {
+    const storage = memoryStorage();
+    let snapshotSeenByScanner: unknown;
+    const existingTabs: ExistingTabsAdapter = {
+      scan: vi.fn(async (session) => {
+        snapshotSeenByScanner = structuredClone(storage.values.activeSession);
+        expect(storage.values.activeSession).toEqual(session);
+      })
+    };
+    const service = new BackgroundService(new StateStore(storage, () => 123_000), {
+      now: () => 123_000,
+      createId: () => "fixed-session",
+      existingTabs
+    });
+    await service.handle({ type: "ADD_BLOCKED_HOST", profileId: "focus", input: "example.com" });
+
+    const response = await service.handle({ type: "START_SESSION", profileId: "focus", durationMinutes: 25 });
+
+    expect(response).toMatchObject({ ok: true, data: { activeSession: { id: "fixed-session" } } });
+    expect(existingTabs.scan).toHaveBeenCalledOnce();
+    expect(snapshotSeenByScanner).toEqual(storage.values.activeSession);
+  });
+
+  it("keeps a successful session and active indicator when existing-tab scanning fails", async () => {
+    const storage = memoryStorage();
+    const indicator = { setActive: vi.fn(async () => undefined), setInactive: vi.fn(async () => undefined) };
+    const existingTabs: ExistingTabsAdapter = {
+      scan: vi.fn(async () => {
+        throw new Error("tabs unavailable");
+      })
+    };
+    const service = new BackgroundService(new StateStore(storage, () => 123_000), {
+      now: () => 123_000,
+      createId: () => "fixed-session",
+      existingTabs,
+      indicator
+    });
+    await service.handle({ type: "ADD_BLOCKED_HOST", profileId: "focus", input: "example.com" });
+
+    const response = await service.handle({ type: "START_SESSION", profileId: "focus", durationMinutes: 25 });
+
+    expect(response).toMatchObject({ ok: true, data: { activeSession: { id: "fixed-session" } } });
+    expect(storage.values.activeSession).toBeDefined();
+    expect(indicator.setActive).toHaveBeenCalledOnce();
   });
 
   it("serializes explicit starts across profiles and creates one effective expiration alarm", async () => {
