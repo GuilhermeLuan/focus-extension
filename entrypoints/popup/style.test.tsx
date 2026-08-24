@@ -44,23 +44,38 @@ describe("popup layout and presentation tokens", () => {
     expect(style).toMatch(/\.summary-end\s*\{[^}]*font-variant-numeric:\s*tabular-nums;/s);
   });
 
-  it("defines semantic light/dark tokens with WCAG AA text and action contrast", () => {
+  it("compacts secondary active-session copy when an error recovery panel is present", () => {
+    expect(style).toMatch(
+      /\.active\.has-error \.active-kicker,[\s\S]*?\.active\.has-error \.active-read-only,[\s\S]*?\.active\.has-error \.protected-note\s*\{[^}]*display:\s*none;/
+    );
+  });
+
+  it("defines semantic light/dark tokens with WCAG AA text, control, and focus contrast", () => {
     const light = tokens.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1];
     const dark = tokens.match(/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([\s\S]*?)\n\s*\}/)?.[1];
     if (!light || !dark) throw new Error("Missing light or dark token theme");
 
     for (const theme of [light, dark]) {
       const surface = tokenValue("--color-surface", theme);
+      const raised = tokenValue("--color-surface-raised", theme);
       const text = tokenValue("--color-text", theme);
       const muted = tokenValue("--color-text-muted", theme);
       const action = tokenValue("--color-action", theme);
+      const border = tokenValue("--color-border", theme);
+      const focus = tokenValue("--color-focus", theme);
       const danger = tokenValue("--color-danger", theme);
       const dangerContrast = tokenValue("--color-danger-contrast", theme);
       expect(contrast(text, surface)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(muted, surface)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(action, surface)).toBeGreaterThanOrEqual(3);
+      expect(contrast(action, surface)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(border, surface)).toBeGreaterThanOrEqual(3);
+      expect(contrast(border, raised)).toBeGreaterThanOrEqual(3);
+      expect(contrast(focus, surface)).toBeGreaterThanOrEqual(3);
+      expect(contrast(focus, raised)).toBeGreaterThanOrEqual(3);
       expect(contrast(dangerContrast, danger)).toBeGreaterThanOrEqual(4.5);
     }
+    expect(style).toMatch(/button:focus-visible,[\s\S]*?select:focus-visible\s*\{[^}]*outline:\s*var\(--focus-width\) solid var\(--color-focus\);/);
+    expect(tokens).toMatch(/--focus-width:\s*3px;/);
   });
 
   it("removes hold easing when reduced motion is requested", () => {

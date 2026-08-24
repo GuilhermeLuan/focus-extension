@@ -307,6 +307,12 @@ button.danger {
   margin-top: 14px;
 }
 
+.active.has-error .active-kicker,
+.active.has-error .active-read-only,
+.active.has-error .protected-note {
+  display: none;
+}
+
 .protected-note {
   margin: 18px 0 0;
   border-left: 3px solid var(--color-action);

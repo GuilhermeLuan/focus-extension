@@ -441,6 +441,40 @@ describe("Popup recovery seam", () => {
     expect(rendered.adapter.runtime.openOptionsPage).toHaveBeenCalledOnce();
   });
 
+  it("requires a fresh hold after a retryable start error", async () => {
+    vi.useFakeTimers();
+    let now = NOW;
+    let startAttempts = 0;
+    const rendered = renderPopup(createState(), (request) => {
+      if (request.type !== "START_SESSION") return undefined;
+      startAttempts += 1;
+      return { ok: false, error: "STORAGE_ERROR" };
+    }, () => now);
+    mounted = rendered;
+    await settle();
+    await act(async () => {
+      button(rendered.container, "Revisar e começar").click();
+      await Promise.resolve();
+    });
+
+    const hold = button(rendered.container, "Mantenha pressionado por 2 segundos");
+    hold.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    now += 2_000;
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(startAttempts).toBe(1);
+
+    await act(async () => {
+      button(rendered.container, "Tentar novamente").click();
+      await Promise.resolve();
+    });
+    expect(startAttempts).toBe(1);
+    expect(button(rendered.container, "Mantenha pressionado por 2 segundos")).toBeTruthy();
+  });
+
   it("offers a state refresh for a closed cancellation window", async () => {
     const state = createActiveState(createActiveSession());
     const rendered = renderPopup(state, (request) => {

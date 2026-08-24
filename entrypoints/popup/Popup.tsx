@@ -186,15 +186,13 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
         setConfirmation(undefined);
         clearError();
       } else {
-        showError(response.error, () => void startSession());
+        showError(response.error, clearError);
       }
     } catch {
-      showError("UNEXPECTED", () => void startSession());
+      showError("UNEXPECTED", clearError);
     } finally {
       startingRef.current = false;
       setIsStarting(false);
-      if (startingRef.current) return;
-      if (state?.activeSession) return;
       setHoldProgress(0);
       holdRef.current?.dispose();
       holdRef.current = undefined;
@@ -336,7 +334,7 @@ export function Popup({ adapter, clock = defaultClock }: PopupProps) {
       {!state && !error ? <p className="loading">{copy.loading}</p> : null}
       {!state && error ? <section className="load-error" aria-label={copy.recoveries.loadLabel}>{errorPanel}</section> : null}
       {active ? (
-        <section className="active" aria-label={copy.active.sectionLabel}>
+        <section className={`active${error ? " has-error" : ""}`} aria-label={copy.active.sectionLabel}>
           {errorPanel}
           <p className="active-kicker">{copy.active.sectionLabel}</p>
           <p className="label">{copy.active.status}</p>
