@@ -100,6 +100,22 @@ export const presentationCopy = {
     cancel: (seconds: number) => `Cancelar sessão · ${seconds}s`,
     endTime: (time: string) => `Termina às ${time}`
   },
+  blocked: {
+    hostnameFallback: "site bloqueado",
+    kicker: "Um intervalo escolhido",
+    blockedMessage: "Você escolheu manter este momento para o que importa.",
+    profileLabel: "Perfil em foco",
+    profileContext: (name: string) => `Perfil ${name}.`,
+    remainingLabel: "Tempo restante",
+    endTime: (time: string) => `Termina às ${time}`,
+    unavailable: "Não foi possível atualizar a sessão. A navegação permanece bloqueada por enquanto.",
+    releasedKicker: "A pausa terminou",
+    releasedMessage: "O caminho está livre novamente.",
+    releasedReason: "A sessão terminou ou foi cancelada.",
+    noDestination: "Feche esta aba ou digite outro endereço.",
+    returnTo: (hostname: string) => `Voltar para ${hostname}`,
+    releasedAnnouncement: "O caminho está livre novamente. A sessão terminou ou foi cancelada."
+  },
   announcements: {
     review: "Revisão da sessão",
     started: "Sessão iniciada. Você ainda pode cancelar",
