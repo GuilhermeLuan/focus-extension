@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { browser } from "wxt/browser";
 import type { ExtensionState, StateResponse } from "../../src/domain/types";
+import { createBlockedPageModel, getSafeDestination } from "../../src/application/blocked";
 import "./style.css";
 
 const sendState = (): Promise<StateResponse> =>
@@ -15,7 +16,14 @@ function formatRemaining(endsAt: number, now: number): string {
 function BlockedPage() {
   const [state, setState] = useState<ExtensionState | undefined>();
   const [now, setNow] = useState(Date.now());
-  const hostname = useMemo(() => new URLSearchParams(window.location.search).get("hostname") ?? "site", []);
+  const captured = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      hostname: params.get("hostname") ?? "site",
+      sessionId: params.get("sessionId") ?? undefined,
+      destination: getSafeDestination(params.get("destination") ?? undefined)
+    };
+  }, []);
 
   useEffect(() => {
     const refresh = () => {
@@ -37,7 +45,8 @@ function BlockedPage() {
   }, []);
 
   const session = state?.activeSession;
-  const ended = !session || session.endsAt <= now;
+  const model = createBlockedPageModel(captured.sessionId, session);
+  const blocked = state === undefined || model.status === "blocked";
   const profileName = session?.profileSnapshot.name ?? "Foco";
 
   return (
@@ -45,13 +54,20 @@ function BlockedPage() {
       <p className="eyebrow">FOCUS LOCK</p>
       <div className="orb" aria-hidden="true">●</div>
       <p className="kicker">Navegação pausada</p>
-      <h1>{hostname}</h1>
-      {ended ? (
-        <p className="message">A sessão terminou.</p>
-      ) : (
+      <h1>{captured.hostname}</h1>
+      {blocked ? (
         <>
           <p className="message">Este hostname está bloqueado pelo perfil <strong>{profileName}</strong>.</p>
-          <p className="remaining">{formatRemaining(session.endsAt, now)}</p>
+          {session && <p className="remaining">{formatRemaining(session.endsAt, now)}</p>}
+        </>
+      ) : (
+        <>
+          <p className="message">A sessão terminou ou foi cancelada.</p>
+          {captured.destination && (
+            <button className="return" type="button" onClick={() => window.location.assign(captured.destination!)}>
+              Voltar ao site
+            </button>
+          )}
         </>
       )}
     </main>

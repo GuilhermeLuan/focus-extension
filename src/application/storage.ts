@@ -30,6 +30,7 @@ type LegacySession = {
   id?: unknown;
   startedAt?: unknown;
   endsAt?: unknown;
+  cancelAllowedUntil?: unknown;
   durationMinutes?: unknown;
   profileSnapshot?: { id?: unknown; name?: unknown; hostname?: unknown };
 };
@@ -106,11 +107,20 @@ function isSession(value: unknown): value is ActiveSession {
   );
 }
 
+function canonicalizeSession(session: ActiveSession): { session: ActiveSession; changed: boolean } {
+  const cancelAllowedUntil = session.startedAt + 60_000;
+  return {
+    session: { ...session, cancelAllowedUntil },
+    changed: session.cancelAllowedUntil !== cancelAllowedUntil
+  };
+}
+
 function cloneSession(session: ActiveSession): ActiveSession {
   return {
     schemaVersion: 1,
     id: session.id,
     startedAt: session.startedAt,
+    cancelAllowedUntil: session.cancelAllowedUntil,
     endsAt: session.endsAt,
     durationMinutes: session.durationMinutes,
     profileSnapshot: {
@@ -161,6 +171,7 @@ function migrateLegacySession(raw: LegacySession): ActiveSession | null {
     schemaVersion: 1,
     id: raw.id,
     startedAt: raw.startedAt,
+    cancelAllowedUntil: raw.startedAt + 60_000,
     endsAt: raw.endsAt,
     durationMinutes: 50,
     profileSnapshot: {
@@ -200,7 +211,9 @@ export class StateStore {
     if (rawSession === undefined) {
       activeSession = undefined;
     } else if (isSession(rawSession)) {
-      activeSession = cloneSession(rawSession);
+      const canonical = canonicalizeSession(rawSession);
+      activeSession = cloneSession(canonical.session);
+      migrated ||= canonical.changed;
     } else {
       activeSession = migrateLegacySession(rawSession as LegacySession) ?? undefined;
       migrated = true;
@@ -228,7 +241,7 @@ export class StateStore {
   }
 
   public async saveSession(activeSession: ActiveSession): Promise<void> {
-    await this.storage.set({ activeSession: cloneSession(activeSession) });
+    await this.storage.set({ activeSession: cloneSession(canonicalizeSession(activeSession).session) });
   }
 
   public async clearSession(): Promise<void> {

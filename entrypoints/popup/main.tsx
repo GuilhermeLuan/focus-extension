@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { browser } from "wxt/browser";
 import type { BackgroundRequest, ExtensionState, StateResponse } from "../../src/domain/types";
 import { createConfirmationModel, type ConfirmationModel } from "../../src/application/confirmation";
+import { getCancelSessionPresentation } from "../../src/application/cancellation";
 import { createHoldController, type HoldController } from "../../src/application/hold";
 import "./style.css";
 
@@ -27,6 +28,8 @@ function errorMessage(error: string): string {
     PRIVATE_PERMISSION_REQUIRED: "Permita o uso em janelas privadas nas configurações do Firefox.",
     SESSION_ALREADY_ACTIVE: "Já existe uma sessão em andamento.",
     URL_UNAVAILABLE: "A aba atual não tem uma URL HTTP(S) disponível.",
+    NO_ACTIVE_SESSION: "Não há uma sessão ativa para cancelar.",
+    CANCEL_WINDOW_CLOSED: "A janela de cancelamento terminou.",
     STORAGE_ERROR: "Não foi possível carregar o Focus Lock."
   };
   return messages[error] ?? error;
@@ -43,7 +46,10 @@ function Popup() {
   const [holdProgress, setHoldProgress] = useState(0);
   const [holdVersion, setHoldVersion] = useState(0);
   const [isStarting, setIsStarting] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancelWindowClosedForSession, setCancelWindowClosedForSession] = useState<string | undefined>();
   const holdRef = useRef<HoldController | undefined>(undefined);
+  const cancellingRef = useRef(false);
 
   const refresh = async () => {
     const response = await send({ type: "GET_STATE" });
@@ -52,6 +58,7 @@ function Popup() {
       if (!response.data.activeSession) {
         const savedDuration = response.data.configuration.lastDurationMinutes;
         setDurationMinutes(durationOptions.includes(savedDuration) ? savedDuration : 50);
+        setCancelWindowClosedForSession(undefined);
       }
       setError(undefined);
     } else {
@@ -78,11 +85,22 @@ function Popup() {
 
   useEffect(() => {
     if (!state?.activeSession) return;
+    setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [state?.activeSession]);
+    const deadlineTimer = window.setTimeout(
+      () => setNow(Date.now()),
+      Math.max(0, state.activeSession.cancelAllowedUntil - Date.now())
+    );
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(deadlineTimer);
+    };
+  }, [state?.activeSession?.id, state?.activeSession?.cancelAllowedUntil]);
 
   const active = state?.activeSession;
+  const cancelPresentation = active && cancelWindowClosedForSession !== active.id
+    ? getCancelSessionPresentation(active, now)
+    : { canCancel: false as const };
   const selectedProfile = useMemo(
     () => state?.configuration.profiles.find((profile) => profile.id === state.configuration.lastSelectedProfileId)
       ?? state?.configuration.profiles[0],
@@ -122,6 +140,32 @@ function Popup() {
       holdRef.current?.dispose();
       holdRef.current = undefined;
       setHoldVersion((version) => version + 1);
+    }
+  };
+
+  const cancelSession = async () => {
+    const current = state?.activeSession;
+    if (!current || !getCancelSessionPresentation(current, now).canCancel || cancellingRef.current) return;
+    cancellingRef.current = true;
+    setIsCancelling(true);
+    try {
+      const response = await send({ type: "CANCEL_SESSION" });
+      if (response.ok) {
+        setState(response.data);
+        setCancelWindowClosedForSession(undefined);
+        setError(undefined);
+      } else if (response.error === "CANCEL_WINDOW_CLOSED") {
+        await refresh();
+        setCancelWindowClosedForSession(current.id);
+        setError("A janela de cancelamento terminou.");
+      } else {
+        setError(errorMessage(response.error));
+      }
+    } catch {
+      setError(errorMessage("STORAGE_ERROR"));
+    } finally {
+      cancellingRef.current = false;
+      setIsCancelling(false);
     }
   };
 
@@ -201,6 +245,11 @@ function Popup() {
             {active.profileSnapshot.domains.map((host) => <li key={host.canonicalHost}>{host.displayHost}</li>)}
           </ul>
           <button className="secondary" type="button" disabled>Bloquear este site</button>
+          {cancelPresentation.canCancel && (
+            <button className="secondary" type="button" disabled={isCancelling} onClick={() => void cancelSession()}>
+              {cancelPresentation.label}
+            </button>
+          )}
           <p className="remaining">{remaining}</p>
           <p className="muted">As regras ficam somente para leitura durante a sessão.</p>
         </section>

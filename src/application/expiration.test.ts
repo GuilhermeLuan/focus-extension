@@ -38,6 +38,7 @@ const expiredSession: ActiveSession = {
   schemaVersion: 1,
   id: "session-1",
   startedAt: 1_000,
+  cancelAllowedUntil: 61_000,
   endsAt: 5_000,
   durationMinutes: 50,
   profileSnapshot: {
@@ -50,7 +51,11 @@ const expiredSession: ActiveSession = {
 describe("session expiration", () => {
   it("removes an expired session before GET_STATE responds", async () => {
     const storage = storageWithSession(expiredSession);
-    const service = new BackgroundService(new StateStore(storage, () => 5_000), { now: () => 5_000 });
+    const indicator = { setActive: vi.fn(), setInactive: vi.fn() };
+    const service = new BackgroundService(new StateStore(storage, () => 5_000), {
+      now: () => 5_000,
+      indicator
+    });
 
     const result = await service.handle({ type: "GET_STATE" });
 
@@ -61,6 +66,7 @@ describe("session expiration", () => {
       }
     });
     expect(storage.values.activeSession).toBeUndefined();
+    expect(indicator.setInactive).toHaveBeenCalledOnce();
   });
 
   it("reconciles and clears the expiration alarm after it fires", async () => {

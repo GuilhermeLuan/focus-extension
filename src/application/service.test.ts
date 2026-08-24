@@ -276,6 +276,7 @@ describe("BackgroundService profiles and blocked hosts", () => {
           schemaVersion: 1,
           id: "fixed-session",
           startedAt: 123_000,
+          cancelAllowedUntil: 183_000,
           endsAt: 1_623_000,
           durationMinutes: 25,
           profileSnapshot: {
@@ -318,5 +319,113 @@ describe("BackgroundService profiles and blocked hosts", () => {
     expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, error: "SESSION_ALREADY_ACTIVE" }]);
     expect(storage.values.activeSession).toMatchObject({ durationMinutes: 5, profileSnapshot: { id: "focus" } });
     expect(alarms.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts cancellation immediately before the deadline and restores the inactive action", async () => {
+    const storage = memoryStorage();
+    const alarms = { create: vi.fn(async () => undefined), clear: vi.fn(async () => true) };
+    const indicator = { setActive: vi.fn(async () => undefined), setInactive: vi.fn(async () => undefined) };
+    let now = 10_000;
+    const service = new BackgroundService(new StateStore(storage, () => now), {
+      now: () => now,
+      createId: () => "session-1",
+      alarms,
+      indicator
+    });
+    await service.handle({ type: "ADD_BLOCKED_HOST", profileId: "focus", input: "example.com" });
+    expect(await service.handle({ type: "START_SESSION", profileId: "focus", durationMinutes: 5 })).toMatchObject({
+      ok: true,
+      data: { activeSession: { cancelAllowedUntil: 70_000 } }
+    });
+    const configurationBeforeCancellation = structuredClone(storage.values.configuration);
+    now = 69_999;
+
+    const response = await service.handle({ type: "CANCEL_SESSION" });
+
+    expect(response).toMatchObject({ ok: true, data: { configuration: { lastDurationMinutes: 5 } } });
+    expect(response.ok && response.data.activeSession).toBeUndefined();
+    expect(storage.values.activeSession).toBeUndefined();
+    expect(storage.values.configuration).toEqual(configurationBeforeCancellation);
+    expect(alarms.clear).toHaveBeenCalledWith("pomodoro-expiration");
+    expect(alarms.clear).toHaveBeenCalledTimes(1);
+    expect(indicator.setActive).toHaveBeenCalledTimes(1);
+    expect(indicator.setInactive).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects cancellation at and after the deadline without removal or effects", async () => {
+    for (const currentTime of [70_000, 70_001]) {
+      const storage = memoryStorage();
+      const alarms = { create: vi.fn(async () => undefined), clear: vi.fn(async () => true) };
+      const indicator = { setActive: vi.fn(async () => undefined), setInactive: vi.fn(async () => undefined) };
+      let now = 10_000;
+      const service = new BackgroundService(new StateStore(storage, () => now), {
+        now: () => now,
+        createId: () => "session-1",
+        alarms,
+        indicator
+      });
+      await service.handle({ type: "ADD_BLOCKED_HOST", profileId: "focus", input: "example.com" });
+      await service.handle({ type: "START_SESSION", profileId: "focus", durationMinutes: 5 });
+      now = currentTime;
+      const writesBefore = storage.writes.length;
+
+      expect(await service.handle({ type: "CANCEL_SESSION" })).toEqual({ ok: false, error: "CANCEL_WINDOW_CLOSED" });
+      expect(storage.values.activeSession).toBeDefined();
+      expect(storage.writes).toHaveLength(writesBefore);
+      expect(alarms.clear).not.toHaveBeenCalled();
+      expect(indicator.setInactive).not.toHaveBeenCalled();
+    }
+  });
+
+  it("serializes two cancellations so only one removes the session", async () => {
+    const storage = memoryStorage();
+    const alarms = { create: vi.fn(async () => undefined), clear: vi.fn(async () => true) };
+    const indicator = { setActive: vi.fn(async () => undefined), setInactive: vi.fn(async () => undefined) };
+    const service = new BackgroundService(new StateStore(storage, () => 10_000), {
+      now: () => 10_000,
+      createId: () => "session-1",
+      alarms,
+      indicator
+    });
+    await service.handle({ type: "ADD_BLOCKED_HOST", profileId: "focus", input: "example.com" });
+    await service.handle({ type: "START_SESSION", profileId: "focus", durationMinutes: 5 });
+
+    const results = await Promise.all([
+      service.handle({ type: "CANCEL_SESSION" }),
+      service.handle({ type: "CANCEL_SESSION" })
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, error: "NO_ACTIVE_SESSION" }]);
+    expect(alarms.clear).toHaveBeenCalledTimes(1);
+    expect(indicator.setInactive).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps cancellation successful and retries derived resources after auxiliary API failures", async () => {
+    const storage = memoryStorage();
+    const alarms = {
+      create: vi.fn(async () => undefined),
+      clear: vi.fn().mockRejectedValueOnce(new Error("alarms unavailable")).mockResolvedValue(true)
+    };
+    const indicator = {
+      setActive: vi.fn(async () => undefined),
+      setInactive: vi.fn().mockRejectedValueOnce(new Error("action unavailable")).mockResolvedValue(undefined)
+    };
+    let now = 10_000;
+    const service = new BackgroundService(new StateStore(storage, () => now), {
+      now: () => now,
+      createId: () => "session-1",
+      alarms,
+      indicator
+    });
+    await service.handle({ type: "ADD_BLOCKED_HOST", profileId: "focus", input: "example.com" });
+    await service.handle({ type: "START_SESSION", profileId: "focus", durationMinutes: 5 });
+    now = 69_999;
+
+    expect(await service.handle({ type: "CANCEL_SESSION" })).toMatchObject({ ok: true });
+    expect(storage.values.activeSession).toBeUndefined();
+    expect(await service.handle({ type: "GET_STATE" })).toMatchObject({ ok: true, data: { configuration: {} } });
+    expect(alarms.clear).toHaveBeenCalledTimes(2);
+    expect(indicator.setInactive).toHaveBeenCalledTimes(2);
   });
 });

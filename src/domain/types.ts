@@ -25,6 +25,7 @@ export type ActiveSession = {
   schemaVersion: 1;
   id: string;
   startedAt: number;
+  cancelAllowedUntil: number;
   endsAt: number;
   durationMinutes: number;
   profileSnapshot: {
@@ -59,6 +60,7 @@ export type BackgroundRequest =
   | { type: "REMOVE_BLOCKED_HOST"; profileId: string; canonicalHost: string }
   | { type: "BLOCK_CURRENT_SITE"; url: string }
   | { type: "START_SESSION"; profileId: string; durationMinutes: number }
+  | { type: "CANCEL_SESSION" }
   // Kept as a compatibility shim for the #1 popup. New screens do not send it.
   | { type: "SET_HOSTNAME"; hostname: string };
 
@@ -70,6 +72,8 @@ export type StartSessionError =
   | "SESSION_ALREADY_ACTIVE"
   | "PRIVATE_PERMISSION_REQUIRED"
   | "STORAGE_ERROR";
+
+export type CancelSessionError = "NO_ACTIVE_SESSION" | "CANCEL_WINDOW_CLOSED" | "STORAGE_ERROR";
 
 export type BackgroundError =
   | "INVALID_PROFILE_NAME"
@@ -83,7 +87,8 @@ export type BackgroundError =
   | "HOST_ALREADY_COVERED"
   | "CONFIRM_CONSOLIDATION"
   | "URL_UNAVAILABLE"
-  | StartSessionError;
+  | StartSessionError
+  | CancelSessionError;
 
 export type ConsolidationDetails = {
   candidate: BlockedHost;

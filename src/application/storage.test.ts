@@ -70,6 +70,7 @@ describe("StateStore", () => {
     expect(state.activeSession?.profileSnapshot.domains).toEqual([
       { canonicalHost: "youtube.com", displayHost: "youtube.com", kind: "domain" }
     ]);
+    expect(state.activeSession?.cancelAllowedUntil).toBe(61_000);
     expect(storage.writes).toHaveLength(1);
     expect(storage.writes[0]).toHaveProperty("activeSession");
 
@@ -95,6 +96,7 @@ describe("StateStore", () => {
         schemaVersion: 1,
         id: "session",
         startedAt: 1_000,
+        cancelAllowedUntil: 61_000,
         endsAt: 1_501_000,
         durationMinutes: 25,
         profileSnapshot: {
@@ -110,5 +112,77 @@ describe("StateStore", () => {
     expect(state.configuration.lastDurationMinutes).toBe(25);
     expect(state.activeSession?.durationMinutes).toBe(25);
     expect(storage.writes).toHaveLength(0);
+  });
+
+  it("migrates a V1 session to a fixed cancellation deadline once", async () => {
+    const storage = memoryStorage({
+      configuration: {
+        schemaVersion: 1,
+        lastSelectedProfileId: "focus",
+        lastDurationMinutes: 50,
+        profiles: [{
+          id: "focus",
+          name: "Foco",
+          domains: [{ canonicalHost: "example.com", displayHost: "example.com", kind: "domain" }],
+          createdAt: 1,
+          updatedAt: 1
+        }]
+      },
+      activeSession: {
+        schemaVersion: 1,
+        id: "old-session",
+        startedAt: 10_000,
+        endsAt: 3_010_000,
+        durationMinutes: 50,
+        profileSnapshot: {
+          id: "focus",
+          name: "Foco",
+          domains: [{ canonicalHost: "example.com", displayHost: "example.com", kind: "domain" }]
+        }
+      }
+    });
+    const store = new StateStore(storage, () => 20_000);
+
+    const state = await store.read();
+    expect(state.activeSession?.cancelAllowedUntil).toBe(70_000);
+    expect(storage.values.activeSession).toMatchObject({ cancelAllowedUntil: 70_000 });
+    expect(storage.writes).toHaveLength(1);
+
+    await store.read();
+    expect(storage.writes).toHaveLength(1);
+  });
+
+  it("corrects a non-canonical cancellation deadline without moving startedAt", async () => {
+    const storage = memoryStorage({
+      configuration: {
+        schemaVersion: 1,
+        lastSelectedProfileId: "focus",
+        lastDurationMinutes: 50,
+        profiles: [{
+          id: "focus",
+          name: "Foco",
+          domains: [{ canonicalHost: "example.com", displayHost: "example.com", kind: "domain" }],
+          createdAt: 1,
+          updatedAt: 1
+        }]
+      },
+      activeSession: {
+        schemaVersion: 1,
+        id: "session",
+        startedAt: 10_000,
+        cancelAllowedUntil: 999_999,
+        endsAt: 3_010_000,
+        durationMinutes: 50,
+        profileSnapshot: {
+          id: "focus",
+          name: "Foco",
+          domains: [{ canonicalHost: "example.com", displayHost: "example.com", kind: "domain" }]
+        }
+      }
+    });
+
+    const state = await new StateStore(storage, () => 20_000).read();
+    expect(state.activeSession).toMatchObject({ startedAt: 10_000, cancelAllowedUntil: 70_000 });
+    expect(storage.writes).toHaveLength(1);
   });
 });

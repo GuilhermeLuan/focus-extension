@@ -20,11 +20,17 @@ export type ServiceOptions = {
   createId?: () => string;
   alarms?: AlarmScheduler;
   isAllowedIncognitoAccess?: () => Promise<boolean>;
+  indicator?: ActionIndicator;
 };
 
 export type AlarmScheduler = {
   create(name: string, alarm: { when: number }): Promise<void>;
   clear(name: string): Promise<boolean>;
+};
+
+export type ActionIndicator = {
+  setActive(): Promise<void> | void;
+  setInactive(): Promise<void> | void;
 };
 
 const EXPIRATION_ALARM = "pomodoro-expiration";
@@ -34,6 +40,11 @@ const noAlarms: AlarmScheduler = {
   async clear() {
     return false;
   }
+};
+
+const noIndicator: ActionIndicator = {
+  async setActive() {},
+  async setInactive() {}
 };
 
 function cloneProfile(profile: BlockingProfile): BlockingProfile {
@@ -69,6 +80,7 @@ export class BackgroundService {
   private readonly createId: () => string;
   private readonly alarms: AlarmScheduler;
   private readonly isAllowedIncognitoAccess: () => Promise<boolean>;
+  private readonly indicator: ActionIndicator;
   private requestQueue: Promise<void> = Promise.resolve();
 
   public constructor(
@@ -79,6 +91,7 @@ export class BackgroundService {
     this.createId = options.createId ?? (() => crypto.randomUUID());
     this.alarms = options.alarms ?? noAlarms;
     this.isAllowedIncognitoAccess = options.isAllowedIncognitoAccess ?? (async () => true);
+    this.indicator = options.indicator ?? noIndicator;
   }
 
   public handle(request: BackgroundRequest): Promise<BackgroundResponse<ExtensionState>> {
@@ -92,7 +105,11 @@ export class BackgroundService {
 
   private async handleRequest(request: BackgroundRequest): Promise<BackgroundResponse<ExtensionState>> {
     try {
-      if (request.type === "GET_STATE") return { ok: true, data: await this.store.read(this.now()) };
+      if (request.type === "GET_STATE") {
+        const state = await this.store.read(this.now());
+        await this.reconcileSessionResources(state);
+        return { ok: true, data: state };
+      }
       if (request.type === "CREATE_PROFILE") return await this.createProfile(request.name);
       if (request.type === "SELECT_PROFILE") return await this.selectProfile(request.profileId);
       if (request.type === "RENAME_PROFILE") return await this.renameProfile(request.profileId, request.name);
@@ -108,21 +125,27 @@ export class BackgroundService {
       if (request.type === "START_SESSION") {
         return await this.startSession(request.profileId, request.durationMinutes);
       }
+      if (request.type === "CANCEL_SESSION") return await this.cancelSession();
       return { ok: false, error: "STORAGE_ERROR" };
     } catch {
       return { ok: false, error: "STORAGE_ERROR" };
     }
   }
 
-  public async handleAlarm(name: string): Promise<void> {
+  public handleAlarm(name: string): Promise<void> {
+    const response = this.requestQueue.then(() => this.reconcileAlarm(name));
+    this.requestQueue = response.then(
+      () => undefined,
+      () => undefined
+    );
+    return response;
+  }
+
+  private async reconcileAlarm(name: string): Promise<void> {
     if (name !== EXPIRATION_ALARM) return;
     try {
       const state = await this.store.read(this.now());
-      if (state.activeSession) {
-        await this.alarms.create(name, { when: state.activeSession.endsAt });
-      } else {
-        await this.alarms.clear(name);
-      }
+      await this.reconcileSessionResources(state);
     } catch {
       // A later state read can retry reconciliation without blocking navigation.
     }
@@ -130,6 +153,24 @@ export class BackgroundService {
 
   private async currentState(): Promise<ExtensionState> {
     return this.store.read(this.now());
+  }
+
+  private async reconcileSessionResources(state: ExtensionState): Promise<void> {
+    const alarmEffect = (async () => {
+      if (state.activeSession) {
+        await this.alarms.create(EXPIRATION_ALARM, { when: state.activeSession.endsAt });
+      } else {
+        await this.alarms.clear(EXPIRATION_ALARM);
+      }
+    })();
+    const indicatorEffect = (async () => {
+      if (state.activeSession) await this.indicator.setActive();
+      else await this.indicator.setInactive();
+    })();
+
+    // Storage is authoritative. Auxiliary browser APIs are derived state and
+    // are retried by the next GET_STATE, startup reconciliation, or alarm.
+    await Promise.allSettled([alarmEffect, indicatorEffect]);
   }
 
   private profileOrError(
@@ -342,6 +383,7 @@ export class BackgroundService {
       schemaVersion: 1,
       id: this.createId(),
       startedAt,
+      cancelAllowedUntil: startedAt + 60_000,
       endsAt: startedAt + durationMinutes * 60_000,
       durationMinutes,
       profileSnapshot: {
@@ -355,7 +397,23 @@ export class BackgroundService {
     configuration.lastSelectedProfileId = profile.id;
     configuration.lastDurationMinutes = durationMinutes;
     await this.store.saveConfiguration(configuration);
-    await this.alarms.create(EXPIRATION_ALARM, { when: activeSession.endsAt });
-    return { ok: true, data: { configuration, activeSession } };
+    const nextState = { configuration, activeSession };
+    await this.reconcileSessionResources(nextState);
+    return { ok: true, data: nextState };
+  }
+
+  private async cancelSession(): Promise<BackgroundResponse<ExtensionState>> {
+    const currentTime = this.now();
+    const state = await this.store.read(currentTime);
+    const activeSession = state.activeSession;
+    if (!activeSession) return { ok: false, error: "NO_ACTIVE_SESSION" };
+    if (currentTime >= activeSession.cancelAllowedUntil) {
+      return { ok: false, error: "CANCEL_WINDOW_CLOSED" };
+    }
+
+    await this.store.clearSession();
+    const nextState = { configuration: state.configuration };
+    await this.reconcileSessionResources(nextState);
+    return { ok: true, data: nextState };
   }
 }

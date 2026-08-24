@@ -30,6 +30,7 @@ export function decideNavigation(
     redirect.search = "";
     redirect.searchParams.set("hostname", destination.hostname);
     redirect.searchParams.set("sessionId", session.id);
+    redirect.searchParams.set("destination", request.url);
     return { type: "redirect", redirectUrl: redirect.toString() };
   } catch {
     return { type: "allow" };

@@ -5,6 +5,9 @@ export default defineConfig({
   manifest: {
     name: "Focus Lock",
     description: "Um Pomodoro simples para proteger o seu foco.",
+    action: {
+      default_icon: "icon-inactive.svg"
+    },
     permissions: ["storage", "alarms", "webRequest", "webRequestBlocking", "activeTab"],
     host_permissions: ["http://*/*", "https://*/*"],
     browser_specific_settings: {

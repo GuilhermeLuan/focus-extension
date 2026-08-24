@@ -1,6 +1,7 @@
 import { browser } from "wxt/browser";
 import { NavigationGuard } from "../src/application/navigation";
 import { BackgroundService } from "../src/application/service";
+import type { ActionIndicator } from "../src/application/service";
 import { StateStore, type StorageArea } from "../src/application/storage";
 import type { BackgroundRequest } from "../src/domain/types";
 
@@ -15,15 +16,23 @@ const alarms = {
   clear: (name: string) => browser.alarms.clear(name)
 };
 
+const actionIndicator: ActionIndicator = {
+  setActive: () => browser.action.setIcon({ path: browser.runtime.getURL("/icon-active.svg") }),
+  setInactive: () => browser.action.setIcon({ path: browser.runtime.getURL("/icon-inactive.svg") })
+};
+
 const store = new StateStore(storage);
 const service = new BackgroundService(store, {
   alarms,
+  indicator: actionIndicator,
   isAllowedIncognitoAccess: () => browser.extension.isAllowedIncognitoAccess()
 });
 
 export default defineBackground(() => {
   const blockedPageUrl = browser.runtime.getURL("blocked.html" as never);
   const navigation = new NavigationGuard(() => store.read(), blockedPageUrl);
+
+  void service.handle({ type: "GET_STATE" });
 
   browser.runtime.onMessage.addListener((message: unknown) => {
     return service.handle(message as BackgroundRequest);

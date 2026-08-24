@@ -6,6 +6,7 @@ const session: ActiveSession = {
   schemaVersion: 1,
   id: "session-1",
   startedAt: 1_000,
+  cancelAllowedUntil: 61_000,
   endsAt: 3_001_000,
   durationMinutes: 50,
   profileSnapshot: {
@@ -30,7 +31,20 @@ describe("navigation decision", () => {
 
     expect(decision).toEqual({
       type: "redirect",
-      redirectUrl: "moz-extension://focus/blocked.html?hostname=m.youtube.com&sessionId=session-1"
+      redirectUrl: "moz-extension://focus/blocked.html?hostname=m.youtube.com&sessionId=session-1&destination=https%3A%2F%2Fm.youtube.com%2Fwatch%3Fv%3Dabc"
+    });
+  });
+
+  it("preserves the complete encoded HTTP destination including its fragment", () => {
+    const decision = decideNavigation(
+      { url: "https://m.youtube.com/watch?v=a%26b#comments", type: "main_frame" },
+      session,
+      "moz-extension://focus/blocked.html"
+    );
+
+    expect(decision).toEqual({
+      type: "redirect",
+      redirectUrl: "moz-extension://focus/blocked.html?hostname=m.youtube.com&sessionId=session-1&destination=https%3A%2F%2Fm.youtube.com%2Fwatch%3Fv%3Da%2526b%23comments"
     });
   });
 
