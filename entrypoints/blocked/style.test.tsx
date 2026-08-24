@@ -7,6 +7,7 @@ describe("blocked page presentation", () => {
   it("uses the shared moss tokens and keeps long hostnames inside the composition", () => {
     expect(style).toContain('@import "../../src/presentation/tokens.css";');
     expect(style).toMatch(/h1\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+    expect(style).toMatch(/\.return\s*\{[^}]*max-width:\s*100%;[^}]*overflow-wrap:\s*anywhere;/s);
     expect(style).toMatch(/\.blocked-page\s*\{[^}]*padding:/s);
   });
 
