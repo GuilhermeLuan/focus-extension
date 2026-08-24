@@ -21,5 +21,12 @@ button.danger { width: 100%; margin-top: 12px; background: color-mix(in srgb, #d
 .confirm { margin-top: 14px; padding: 12px; border-radius: 10px; background: color-mix(in srgb, #6c63ff 12%, transparent); font-size: 13px; }
 .confirm p { margin: 0 0 10px; line-height: 1.4; }
 .confirm button + button { margin-left: 8px; }
+.backup-card > button { margin-top: 4px; }
+.backup-summary { margin-top: 16px; padding: 14px; border-radius: 10px; background: color-mix(in srgb, CanvasText 7%, transparent); }
+.backup-summary > p { margin: 0 0 10px; font-size: 13px; font-weight: 700; }
+.backup-summary dl { margin: 0 0 14px; }
+.backup-summary dl div { display: flex; justify-content: space-between; gap: 16px; padding: 5px 0; font-size: 12px; }
+.backup-summary dt { color: color-mix(in srgb, CanvasText 60%, transparent); }
+.backup-summary dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 .error { color: #d33b52; font-size: 13px; }
 @media (max-width: 480px) { .inline { flex-direction: column; } }

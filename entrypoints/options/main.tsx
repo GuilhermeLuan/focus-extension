@@ -1,7 +1,23 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { browser } from "wxt/browser";
-import type { BackgroundRequest, ExtensionState, StateResponse } from "../../src/domain/types";
+import {
+  BackupValidationError,
+  decodeBackupFile,
+  parseConfigurationBackup,
+  preImportBackupFileName,
+  serializeConfigurationBackup,
+  summarizeConfigurationBackup,
+  type BackupSummary
+} from "../../src/application/backup";
+import { downloadJsonFile } from "./download";
+import type {
+  BackgroundRequest,
+  BackgroundResponse,
+  ExportConfigurationData,
+  ExtensionState,
+  StateResponse
+} from "../../src/domain/types";
 import "./style.css";
 
 type ConsolidationPrompt = {
@@ -13,6 +29,29 @@ type ConsolidationPrompt = {
 const send = (request: BackgroundRequest): Promise<StateResponse> =>
   browser.runtime.sendMessage(request) as Promise<StateResponse>;
 
+const sendExport = (request: { type: "EXPORT_CONFIGURATION" }): Promise<BackgroundResponse<ExportConfigurationData>> =>
+  browser.runtime.sendMessage(request) as Promise<BackgroundResponse<ExportConfigurationData>>;
+
+type SelectedBackup = {
+  content: string;
+  summary: BackupSummary;
+};
+
+function backupErrorMessage(error: unknown): string {
+  if (error instanceof BackupValidationError) {
+    if (error.code === "BACKUP_TOO_LARGE") return "O backup excede o limite de 1 MiB.";
+    if (error.code === "UNSUPPORTED_BACKUP_VERSION") return "A versão deste backup não é compatível.";
+    return "O arquivo não é um backup Focus Lock válido.";
+  }
+  return "Não foi possível ler o arquivo de backup.";
+}
+
+function serviceErrorMessage(error: string): string {
+  if (error === "CONFIGURATION_CHANGED") return "A configuração mudou. Verifique o arquivo e tente novamente.";
+  if (error === "IMPORT_SESSION_ACTIVE") return "Encerre a sessão atual antes de substituir a configuração.";
+  return error;
+}
+
 function Options() {
   const [state, setState] = useState<ExtensionState | undefined>();
   const [profileName, setProfileName] = useState("");
@@ -20,6 +59,10 @@ function Options() {
   const [renameInput, setRenameInput] = useState("");
   const [error, setError] = useState<string | undefined>();
   const [consolidation, setConsolidation] = useState<ConsolidationPrompt>();
+  const [selectedBackup, setSelectedBackup] = useState<SelectedBackup>();
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const backupInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = async () => {
     const response = await send({ type: "GET_STATE" });
@@ -115,6 +158,102 @@ function Options() {
     }
   };
 
+  const selectBackupFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    setSelectedBackup(undefined);
+    setError(undefined);
+    if (!file) return;
+    try {
+      const content = await decodeBackupFile(file);
+      const parsed = parseConfigurationBackup(content);
+      setSelectedBackup({ content, summary: summarizeConfigurationBackup(parsed) });
+    } catch (fileError) {
+      setError(backupErrorMessage(fileError));
+    }
+  };
+
+  const exportConfiguration = async () => {
+    setExporting(true);
+    setError(undefined);
+    try {
+      const response = await sendExport({ type: "EXPORT_CONFIGURATION" });
+      if (response.ok) {
+        downloadJsonFile(response.data.fileName, response.data.content);
+      } else {
+        setError(serviceErrorMessage(response.error));
+      }
+    } catch {
+      setError("Não foi possível exportar a configuração.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const refreshAfterImportRejection = async (message: string) => {
+    const response = await send({ type: "GET_STATE" });
+    if (response.ok) {
+      setState(response.data);
+      const profile = response.data.configuration.profiles.find(
+        (candidate) => candidate.id === response.data.configuration.lastSelectedProfileId
+      );
+      setRenameInput(profile?.name ?? "");
+    }
+    setError(message);
+  };
+
+  const replaceConfiguration = async () => {
+    if (!selectedBackup || state?.activeSession) return;
+    if (
+      !window.confirm(
+        "Substituirá todos os perfis e preferências locais pela configuração do backup. Deseja continuar?"
+      )
+    ) return;
+
+    setImporting(true);
+    setError(undefined);
+    try {
+      const currentResponse = await send({ type: "GET_STATE" });
+      if (!currentResponse.ok) {
+        setError(serviceErrorMessage(currentResponse.error));
+        return;
+      }
+      setState(currentResponse.data);
+      if (currentResponse.data.activeSession) {
+        setError("Encerre a sessão atual antes de substituir a configuração.");
+        return;
+      }
+
+      const preventiveNow = Date.now();
+      const preventive = serializeConfigurationBackup(currentResponse.data.configuration, preventiveNow);
+      downloadJsonFile(preImportBackupFileName(new Date(preventiveNow).toISOString()), preventive.content);
+
+      const response = await send({
+        type: "IMPORT_CONFIGURATION",
+        content: selectedBackup.content,
+        expectedCurrentConfiguration: currentResponse.data.configuration
+      });
+      if (response.ok) {
+        setState(response.data);
+        const profile = response.data.configuration.profiles.find(
+          (candidate) => candidate.id === response.data.configuration.lastSelectedProfileId
+        );
+        setRenameInput(profile?.name ?? "");
+        setSelectedBackup(undefined);
+        setConsolidation(undefined);
+        if (backupInputRef.current) backupInputRef.current.value = "";
+        setError(undefined);
+      } else if (response.error === "CONFIGURATION_CHANGED" || response.error === "IMPORT_SESSION_ACTIVE") {
+        await refreshAfterImportRejection(serviceErrorMessage(response.error));
+      } else {
+        setError(serviceErrorMessage(response.error));
+      }
+    } catch {
+      setError("Não foi possível concluir a restauração; a configuração não foi substituída.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <main className="options" aria-live="polite">
       <p className="eyebrow">FOCUS LOCK</p>
@@ -175,6 +314,38 @@ function Options() {
           ))}
         </ul>
         {!selected?.domains.length && <p className="note">Nenhuma regra adicionada.</p>}
+      </section>
+      <section className="card backup-card" aria-label="Backup e restauração">
+        <h2>Backup e restauração</h2>
+        <p className="note">Exporte sua configuração ou substitua todos os perfis por um backup Focus Lock.</p>
+        <button type="button" disabled={exporting} onClick={() => void exportConfiguration()}>
+          {exporting ? "Exportando…" : "Exportar configuração"}
+        </button>
+        <label htmlFor="backup-file">Selecionar backup (.json)</label>
+        <input
+          ref={backupInputRef}
+          id="backup-file"
+          type="file"
+          accept=".json,application/json"
+          disabled={Boolean(state?.activeSession) || importing}
+          onChange={(event) => void selectBackupFile(event)}
+        />
+        {state?.activeSession && <p className="note">A restauração fica indisponível durante uma sessão ativa.</p>}
+        {selectedBackup && (
+          <div className="backup-summary" aria-label="Resumo do backup">
+            <p>Backup selecionado</p>
+            <dl>
+              <div><dt>Exportado em</dt><dd>{selectedBackup.summary.exportedAt}</dd></div>
+              <div><dt>Perfis</dt><dd>{selectedBackup.summary.profileCount}</dd></div>
+              <div><dt>Regras</dt><dd>{selectedBackup.summary.ruleCount}</dd></div>
+              <div><dt>Perfil selecionado</dt><dd>{selectedBackup.summary.selectedProfileName}</dd></div>
+              <div><dt>Duração padrão</dt><dd>{selectedBackup.summary.durationMinutes} minutos</dd></div>
+            </dl>
+            <button type="button" disabled={importing || Boolean(state?.activeSession)} onClick={() => void replaceConfiguration()}>
+              {importing ? "Substituindo…" : "Substituir configuração"}
+            </button>
+          </div>
+        )}
       </section>
       {error && <p className="error">{error}</p>}
     </main>

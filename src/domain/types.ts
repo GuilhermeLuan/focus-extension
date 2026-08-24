@@ -45,8 +45,18 @@ export type ExtensionState = {
   activeSession?: ActiveSession;
 };
 
+export type ExportConfigurationRequest = { type: "EXPORT_CONFIGURATION" };
+
+export type ImportConfigurationRequest = {
+  type: "IMPORT_CONFIGURATION";
+  content: string;
+  expectedCurrentConfiguration: StoredConfiguration;
+};
+
 export type BackgroundRequest =
   | { type: "GET_STATE" }
+  | ExportConfigurationRequest
+  | ImportConfigurationRequest
   | { type: "CREATE_PROFILE"; name: string }
   | { type: "SELECT_PROFILE"; profileId: string }
   | { type: "RENAME_PROFILE"; profileId: string; name: string }
@@ -75,6 +85,19 @@ export type StartSessionError =
 
 export type CancelSessionError = "NO_ACTIVE_SESSION" | "CANCEL_WINDOW_CLOSED" | "STORAGE_ERROR";
 
+export type ImportConfigurationError =
+  | "IMPORT_SESSION_ACTIVE"
+  | "BACKUP_TOO_LARGE"
+  | "INVALID_BACKUP"
+  | "UNSUPPORTED_BACKUP_VERSION"
+  | "CONFIGURATION_CHANGED"
+  | "STORAGE_ERROR";
+
+export type ExportConfigurationData = {
+  fileName: string;
+  content: string;
+};
+
 export type BackgroundError =
   | "INVALID_PROFILE_NAME"
   | "DUPLICATE_PROFILE_NAME"
@@ -88,7 +111,8 @@ export type BackgroundError =
   | "CONFIRM_CONSOLIDATION"
   | "URL_UNAVAILABLE"
   | StartSessionError
-  | CancelSessionError;
+  | CancelSessionError
+  | ImportConfigurationError;
 
 export type ConsolidationDetails = {
   candidate: BlockedHost;

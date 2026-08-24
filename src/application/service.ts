@@ -5,11 +5,17 @@ import {
   type BlockedHostInsertion
 } from "../domain/hostname";
 import {
+  BackupValidationError,
+  parseConfigurationBackup,
+  serializeConfigurationBackup
+} from "./backup";
+import {
   type ActiveSession,
   type BackgroundError,
   type BackgroundRequest,
   type BackgroundResponse,
   type BlockingProfile,
+  type ExportConfigurationData,
   type ExtensionState,
   type StoredConfiguration
 } from "../domain/types";
@@ -75,6 +81,25 @@ function profileIsLocked(state: ExtensionState, profileId: string): boolean {
   return state.activeSession?.profileSnapshot.id === profileId;
 }
 
+function deeplyEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => deeplyEqual(value, right[index]));
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) => Object.prototype.hasOwnProperty.call(rightRecord, key) && deeplyEqual(leftRecord[key], rightRecord[key])
+    )
+  );
+}
+
 export class BackgroundService {
   private readonly now: Clock;
   private readonly createId: () => string;
@@ -94,7 +119,14 @@ export class BackgroundService {
     this.indicator = options.indicator ?? noIndicator;
   }
 
-  public handle(request: BackgroundRequest): Promise<BackgroundResponse<ExtensionState>> {
+  public handle(request: { type: "EXPORT_CONFIGURATION" }): Promise<BackgroundResponse<ExportConfigurationData>>;
+  public handle(request: Exclude<BackgroundRequest, { type: "EXPORT_CONFIGURATION" }>): Promise<BackgroundResponse<ExtensionState>>;
+  public handle(
+    request: BackgroundRequest
+  ): Promise<BackgroundResponse<ExtensionState> | BackgroundResponse<ExportConfigurationData>>;
+  public handle(
+    request: BackgroundRequest
+  ): Promise<BackgroundResponse<ExtensionState> | BackgroundResponse<ExportConfigurationData>> {
     const response = this.requestQueue.then(() => this.handleRequest(request));
     this.requestQueue = response.then(
       () => undefined,
@@ -103,13 +135,17 @@ export class BackgroundService {
     return response;
   }
 
-  private async handleRequest(request: BackgroundRequest): Promise<BackgroundResponse<ExtensionState>> {
+  private async handleRequest(
+    request: BackgroundRequest
+  ): Promise<BackgroundResponse<ExtensionState> | BackgroundResponse<ExportConfigurationData>> {
     try {
       if (request.type === "GET_STATE") {
         const state = await this.store.read(this.now());
         await this.reconcileSessionResources(state);
         return { ok: true, data: state };
       }
+      if (request.type === "EXPORT_CONFIGURATION") return await this.exportConfiguration();
+      if (request.type === "IMPORT_CONFIGURATION") return await this.importConfiguration(request.content, request.expectedCurrentConfiguration);
       if (request.type === "CREATE_PROFILE") return await this.createProfile(request.name);
       if (request.type === "SELECT_PROFILE") return await this.selectProfile(request.profileId);
       if (request.type === "RENAME_PROFILE") return await this.renameProfile(request.profileId, request.name);
@@ -130,6 +166,35 @@ export class BackgroundService {
     } catch {
       return { ok: false, error: "STORAGE_ERROR" };
     }
+  }
+
+  private async exportConfiguration(): Promise<BackgroundResponse<ExportConfigurationData>> {
+    const currentTime = this.now();
+    const state = await this.store.read(currentTime);
+    await this.reconcileSessionResources(state);
+    return { ok: true, data: serializeConfigurationBackup(state.configuration, currentTime) };
+  }
+
+  private async importConfiguration(
+    content: string,
+    expectedCurrentConfiguration: StoredConfiguration
+  ): Promise<BackgroundResponse<ExtensionState>> {
+    let imported: StoredConfiguration;
+    try {
+      imported = parseConfigurationBackup(content).configuration;
+    } catch (error) {
+      if (error instanceof BackupValidationError) return { ok: false, error: error.code };
+      throw error;
+    }
+
+    const state = await this.currentState();
+    if (state.activeSession) return { ok: false, error: "IMPORT_SESSION_ACTIVE" };
+    if (!deeplyEqual(state.configuration, expectedCurrentConfiguration)) {
+      return { ok: false, error: "CONFIGURATION_CHANGED" };
+    }
+
+    await this.store.saveConfiguration(imported);
+    return { ok: true, data: { configuration: imported } };
   }
 
   public handleAlarm(name: string): Promise<void> {

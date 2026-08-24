@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { defaultConfiguration, type StoredConfiguration } from "../domain/types";
+import { serializeConfigurationBackup } from "./backup";
 import { StateStore, type StorageArea } from "./storage";
 import { BackgroundService } from "./service";
 
@@ -22,6 +24,119 @@ function memoryStorage(initial: Record<string, unknown> = {}): StorageArea & { v
 }
 
 describe("BackgroundService profiles and blocked hosts", () => {
+  it("exports the reconciled configuration even while a session is active", async () => {
+    const configuration = defaultConfiguration(1000);
+    const storage = memoryStorage({
+      configuration,
+      activeSession: {
+        schemaVersion: 1,
+        id: "session",
+        startedAt: 1000,
+        cancelAllowedUntil: 61_000,
+        endsAt: 301_000,
+        durationMinutes: 5,
+        profileSnapshot: { id: "focus", name: "Foco", domains: [] }
+      }
+    });
+    const service = new BackgroundService(new StateStore(storage, () => 2000), { now: () => 2000 });
+
+    const response = await service.handle({ type: "EXPORT_CONFIGURATION" });
+
+    expect(response).toEqual({
+      ok: true,
+      data: serializeConfigurationBackup(configuration, 2000)
+    });
+    expect(response.ok && response.data.content).not.toContain("activeSession");
+    expect(storage.writes).toHaveLength(0);
+  });
+
+  it("imports valid configuration with one write and returns no session", async () => {
+    const current = defaultConfiguration(1000);
+    const imported: StoredConfiguration = {
+      ...current,
+      lastDurationMinutes: 25,
+      profiles: [{ ...current.profiles[0], name: "Importado", updatedAt: 2000 }]
+    };
+    const storage = memoryStorage({ configuration: current });
+    const service = new BackgroundService(new StateStore(storage, () => 2000), { now: () => 2000 });
+    const content = serializeConfigurationBackup(imported, 2000).content;
+
+    const response = await service.handle({
+      type: "IMPORT_CONFIGURATION",
+      content,
+      expectedCurrentConfiguration: current
+    });
+
+    expect(response).toEqual({ ok: true, data: { configuration: imported } });
+    expect(storage.values.configuration).toEqual(imported);
+    expect(storage.writes).toHaveLength(1);
+  });
+
+  it("rejects imports during a session, invalid content, or a concurrent configuration change without writing", async () => {
+    const current = defaultConfiguration(1000);
+    const imported = { ...current, lastDurationMinutes: 25 };
+    const content = serializeConfigurationBackup(imported, 2000).content;
+    const activeStorage = memoryStorage({
+      configuration: current,
+      activeSession: {
+        schemaVersion: 1,
+        id: "session",
+        startedAt: 1000,
+        cancelAllowedUntil: 61_000,
+        endsAt: 301_000,
+        durationMinutes: 5,
+        profileSnapshot: { id: "focus", name: "Foco", domains: [] }
+      }
+    });
+    const activeService = new BackgroundService(new StateStore(activeStorage, () => 2000), { now: () => 2000 });
+    expect(await activeService.handle({ type: "IMPORT_CONFIGURATION", content, expectedCurrentConfiguration: current })).toEqual({
+      ok: false,
+      error: "IMPORT_SESSION_ACTIVE"
+    });
+    expect(activeStorage.writes).toHaveLength(0);
+
+    const invalidStorage = memoryStorage({ configuration: current });
+    const invalidService = new BackgroundService(new StateStore(invalidStorage, () => 2000), { now: () => 2000 });
+    expect(await invalidService.handle({ type: "IMPORT_CONFIGURATION", content: "{}", expectedCurrentConfiguration: current })).toEqual({
+      ok: false,
+      error: "INVALID_BACKUP"
+    });
+    expect(invalidStorage.writes).toHaveLength(0);
+
+    const changedStorage = memoryStorage({ configuration: { ...current, lastDurationMinutes: 30 } });
+    const changedService = new BackgroundService(new StateStore(changedStorage, () => 2000), { now: () => 2000 });
+    expect(await changedService.handle({ type: "IMPORT_CONFIGURATION", content, expectedCurrentConfiguration: current })).toEqual({
+      ok: false,
+      error: "CONFIGURATION_CHANGED"
+    });
+    expect(changedStorage.writes).toHaveLength(0);
+  });
+
+  it("preserves the current configuration when the single import write fails", async () => {
+    const current = defaultConfiguration(1000);
+    const imported = { ...current, lastDurationMinutes: 25 };
+    const values: Record<string, unknown> = { configuration: current };
+    const storage: StorageArea = {
+      async get() {
+        return { ...values };
+      },
+      async set() {
+        throw new Error("storage unavailable");
+      },
+      async remove() {}
+    };
+    const service = new BackgroundService(new StateStore(storage, () => 2000), { now: () => 2000 });
+
+    const response = await service.handle({
+      type: "IMPORT_CONFIGURATION",
+      content: serializeConfigurationBackup(imported, 2000).content,
+      expectedCurrentConfiguration: current
+    });
+
+    expect(response).toEqual({ ok: false, error: "STORAGE_ERROR" });
+    expect(values.configuration).toEqual(current);
+  });
+
   it("creates, selects, renames, and rejects duplicate profile names", async () => {
     const storage = memoryStorage();
     let now = 1000;
