@@ -1,4 +1,4 @@
-import { matchesHostname } from "../domain/hostname";
+import { matchesBlockedHost } from "../domain/hostname";
 import type { ActiveSession } from "../domain/types";
 
 export type NavigationRequest = {
@@ -22,7 +22,7 @@ export function decideNavigation(
     if (destination.protocol !== "http:" && destination.protocol !== "https:") {
       return { type: "allow" };
     }
-    if (!matchesHostname(destination.hostname, session.profileSnapshot.hostname)) {
+    if (!session.profileSnapshot.domains.some((blockedHost) => matchesBlockedHost(destination.hostname, blockedHost))) {
       return { type: "allow" };
     }
 

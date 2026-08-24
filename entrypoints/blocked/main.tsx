@@ -18,9 +18,17 @@ function BlockedPage() {
   const hostname = useMemo(() => new URLSearchParams(window.location.search).get("hostname") ?? "site", []);
 
   useEffect(() => {
-    void sendState().then((response) => {
-      if (response.ok) setState(response.data);
-    });
+    const refresh = () => {
+      void sendState().then((response) => {
+        if (response.ok) setState(response.data);
+      });
+    };
+    refresh();
+    const onChanged = (changes: Record<string, unknown>) => {
+      if (changes.configuration || changes.activeSession) refresh();
+    };
+    browser.storage.onChanged.addListener(onChanged as never);
+    return () => browser.storage.onChanged.removeListener(onChanged as never);
   }, []);
 
   useEffect(() => {
@@ -30,6 +38,7 @@ function BlockedPage() {
 
   const session = state?.activeSession;
   const ended = !session || session.endsAt <= now;
+  const profileName = session?.profileSnapshot.name ?? "Foco";
 
   return (
     <main className="blocked" aria-live="polite">
@@ -41,7 +50,7 @@ function BlockedPage() {
         <p className="message">A sessão terminou.</p>
       ) : (
         <>
-          <p className="message">Este hostname está bloqueado pelo perfil <strong>Foco</strong>.</p>
+          <p className="message">Este hostname está bloqueado pelo perfil <strong>{profileName}</strong>.</p>
           <p className="remaining">{formatRemaining(session.endsAt, now)}</p>
         </>
       )}

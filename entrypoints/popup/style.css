@@ -12,13 +12,16 @@ body { margin: 0; min-width: 300px; }
 h1 { margin: 0; font-size: 24px; letter-spacing: -.04em; }
 .profile { margin: 6px 0 24px; color: color-mix(in srgb, CanvasText 65%, transparent); font-size: 13px; }
 label, .label { display: block; margin-bottom: 7px; font-size: 12px; font-weight: 650; }
-input { width: 100%; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); border-radius: 10px; background: transparent; color: inherit; padding: 11px 12px; font: inherit; }
+input, select { width: 100%; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); border-radius: 10px; background: transparent; color: inherit; padding: 11px 12px; font: inherit; }
 button { width: 100%; border: 0; border-radius: 10px; padding: 11px 12px; margin-top: 10px; font: inherit; font-weight: 700; cursor: pointer; }
 button.primary { background: #6c63ff; color: white; }
 button.secondary { background: color-mix(in srgb, CanvasText 10%, transparent); color: inherit; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 .active { border: 1px solid color-mix(in srgb, #6c63ff 45%, transparent); border-radius: 14px; padding: 16px; }
 .hostname { margin: 0; overflow-wrap: anywhere; font-weight: 700; }
+.host-list { margin: 10px 0 0; padding-left: 18px; overflow-wrap: anywhere; font-size: 12px; }
+.host-list li + li { margin-top: 4px; }
 .remaining { margin: 20px 0 4px; font-size: 32px; font-variant-numeric: tabular-nums; letter-spacing: -.05em; }
 .muted { margin: 0; color: color-mix(in srgb, CanvasText 60%, transparent); font-size: 12px; }
+.options-link { display: block; margin-top: 14px; background: transparent; color: #6c63ff; padding: 0; font-size: 12px; text-align: center; }
 .error { margin: 14px 0 0; color: #d33b52; font-size: 12px; }

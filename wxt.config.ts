@@ -5,7 +5,7 @@ export default defineConfig({
   manifest: {
     name: "Focus Lock",
     description: "Um Pomodoro simples para proteger o seu foco.",
-    permissions: ["storage", "alarms", "webRequest", "webRequestBlocking"],
+    permissions: ["storage", "alarms", "webRequest", "webRequestBlocking", "activeTab"],
     host_permissions: ["http://*/*", "https://*/*"],
     browser_specific_settings: {
       gecko: {

@@ -1,0 +1,25 @@
+:root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: Canvas; color: CanvasText; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.options { width: min(720px, 100%); margin: 0 auto; padding: 42px 24px 64px; }
+.eyebrow { margin: 0 0 10px; color: #6c63ff; font-size: 11px; font-weight: 700; letter-spacing: .16em; }
+h1 { margin: 0; font-size: 34px; letter-spacing: -.05em; }
+h2 { margin: 0; font-size: 17px; }
+.intro { margin: 10px 0 28px; color: color-mix(in srgb, CanvasText 64%, transparent); }
+.card { margin-top: 16px; padding: 20px; border: 1px solid color-mix(in srgb, CanvasText 16%, transparent); border-radius: 16px; }
+label { display: block; margin: 14px 0 7px; font-size: 12px; font-weight: 700; }
+select, input { width: 100%; min-width: 0; border: 1px solid color-mix(in srgb, CanvasText 24%, transparent); border-radius: 9px; background: transparent; color: inherit; padding: 10px 11px; font: inherit; }
+button { border: 0; border-radius: 9px; background: #6c63ff; color: #fff; padding: 10px 12px; font: inherit; font-weight: 700; cursor: pointer; white-space: nowrap; }
+button:disabled { cursor: not-allowed; opacity: .42; }
+button.secondary { background: color-mix(in srgb, CanvasText 12%, transparent); color: inherit; }
+button.danger { width: 100%; margin-top: 12px; background: color-mix(in srgb, #d33b52 14%, transparent); color: #d33b52; }
+.inline { display: flex; gap: 8px; }
+.note { color: color-mix(in srgb, CanvasText 60%, transparent); font-size: 12px; line-height: 1.45; }
+.rules { margin: 18px 0 0; padding: 0; list-style: none; }
+.rules li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent); overflow-wrap: anywhere; }
+.rules button { background: transparent; color: #d33b52; padding: 4px; font-size: 12px; }
+.confirm { margin-top: 14px; padding: 12px; border-radius: 10px; background: color-mix(in srgb, #6c63ff 12%, transparent); font-size: 13px; }
+.confirm p { margin: 0 0 10px; line-height: 1.4; }
+.confirm button + button { margin-left: 8px; }
+.error { color: #d33b52; font-size: 13px; }
+@media (max-width: 480px) { .inline { flex-direction: column; } }

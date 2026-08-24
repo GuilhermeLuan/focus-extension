@@ -7,7 +7,15 @@ function storageWithSession(session: ActiveSession) {
   const values: Record<string, unknown> = {
     configuration: {
       schemaVersion: 1,
-      profile: { id: "focus", name: "Foco", hostname: "youtube.com" }
+      lastSelectedProfileId: "focus",
+      lastDurationMinutes: 50,
+      profiles: [{
+        id: "focus",
+        name: "Foco",
+        domains: [{ canonicalHost: "youtube.com", displayHost: "youtube.com", kind: "domain" }],
+        createdAt: 1,
+        updatedAt: 1
+      }]
     } satisfies StoredConfiguration,
     activeSession: session
   };
@@ -32,7 +40,11 @@ const expiredSession: ActiveSession = {
   startedAt: 1_000,
   endsAt: 5_000,
   durationMinutes: 50,
-  profileSnapshot: { id: "focus", name: "Foco", hostname: "youtube.com" }
+  profileSnapshot: {
+    id: "focus",
+    name: "Foco",
+    domains: [{ canonicalHost: "youtube.com", displayHost: "youtube.com", kind: "domain" }]
+  }
 };
 
 describe("session expiration", () => {

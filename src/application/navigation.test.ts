@@ -11,7 +11,11 @@ const session: ActiveSession = {
   profileSnapshot: {
     id: "focus",
     name: "Foco",
-    hostname: "youtube.com"
+    domains: [
+      { canonicalHost: "youtube.com", displayHost: "youtube.com", kind: "domain" },
+      { canonicalHost: "127.0.0.1", displayHost: "127.0.0.1", kind: "ipv4" },
+      { canonicalHost: "localhost", displayHost: "localhost", kind: "localhost" }
+    ]
   }
 };
 
@@ -41,5 +45,11 @@ describe("navigation decision", () => {
     for (const request of requests) {
       expect(decideNavigation(request, session, "moz-extension://focus/blocked.html")).toEqual({ type: "allow" });
     }
+  });
+
+  it("uses exact matching for IP and localhost rules", () => {
+    expect(decideNavigation({ url: "http://127.0.0.1:3000", type: "main_frame" }, session, "moz-extension://focus/blocked.html").type).toBe("redirect");
+    expect(decideNavigation({ url: "http://127.0.0.10", type: "main_frame" }, session, "moz-extension://focus/blocked.html")).toEqual({ type: "allow" });
+    expect(decideNavigation({ url: "http://foo.localhost", type: "main_frame" }, session, "moz-extension://focus/blocked.html")).toEqual({ type: "allow" });
   });
 });
