@@ -84,6 +84,28 @@ export function completionNotificationId(sessionId: string): string {
   return `pomodoro-completed:${sessionId}`;
 }
 
+const backgroundRequestTypes = new Set<BackgroundRequest["type"]>([
+  "GET_STATE",
+  "EXPORT_CONFIGURATION",
+  "IMPORT_CONFIGURATION",
+  "CREATE_PROFILE",
+  "SELECT_PROFILE",
+  "RENAME_PROFILE",
+  "DELETE_PROFILE",
+  "ADD_BLOCKED_HOST",
+  "REMOVE_BLOCKED_HOST",
+  "BLOCK_CURRENT_SITE",
+  "START_SESSION",
+  "CANCEL_SESSION",
+  "SET_HOSTNAME"
+]);
+
+function isBackgroundRequest(value: unknown): value is BackgroundRequest {
+  if (typeof value !== "object" || value === null || !("type" in value)) return false;
+  const type = (value as { type?: unknown }).type;
+  return typeof type === "string" && backgroundRequestTypes.has(type as BackgroundRequest["type"]);
+}
+
 function cloneProfile(profile: BlockingProfile): BlockingProfile {
   return {
     ...profile,
@@ -162,7 +184,28 @@ export class BackgroundService {
   public handle(
     request: BackgroundRequest
   ): Promise<BackgroundResponse<ExtensionState> | BackgroundResponse<ExportConfigurationData>> {
-    const response = this.requestQueue.then(() => this.handleRequest(request));
+    return this.enqueue(() => this.handleRequest(request));
+  }
+
+  /**
+   * Reconcile persisted state and its derived browser resources in the same
+   * queue used by messages and alarms. Lifecycle handlers deliberately receive
+   * a void promise: auxiliary browser failures are retried by the next valid
+   * trigger and must not become unhandled listener rejections.
+   */
+  public reconcile(): Promise<void> {
+    return this.enqueue(async () => {
+      try {
+        await this.readAndReconcile();
+      } catch {
+        // Storage can be unavailable while the browser is starting. A later
+        // lifecycle event, alarm, or valid request retries the read.
+      }
+    });
+  }
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const response = this.requestQueue.then(task);
     this.requestQueue = response.then(
       () => undefined,
       () => undefined
@@ -174,45 +217,62 @@ export class BackgroundService {
     request: BackgroundRequest
   ): Promise<BackgroundResponse<ExtensionState> | BackgroundResponse<ExportConfigurationData>> {
     try {
-      if (request.type === "GET_STATE") {
-        const state = await this.store.read(this.now());
-        await this.reconcileState(state);
-        return { ok: true, data: state };
+      // Unknown messages must preserve the old error behavior without any
+      // storage or browser side effects.
+      if (!isBackgroundRequest(request)) return { ok: false, error: "STORAGE_ERROR" };
+
+      const { state, currentTime } = await this.readAndReconcile();
+      if (request.type === "GET_STATE") return { ok: true, data: state };
+      if (request.type === "EXPORT_CONFIGURATION") return await this.exportConfiguration(state, currentTime);
+      if (request.type === "IMPORT_CONFIGURATION") {
+        return await this.importConfiguration(request.content, request.expectedCurrentConfiguration, state);
       }
-      if (request.type === "EXPORT_CONFIGURATION") return await this.exportConfiguration();
-      if (request.type === "IMPORT_CONFIGURATION") return await this.importConfiguration(request.content, request.expectedCurrentConfiguration);
-      if (request.type === "CREATE_PROFILE") return await this.createProfile(request.name);
-      if (request.type === "SELECT_PROFILE") return await this.selectProfile(request.profileId);
-      if (request.type === "RENAME_PROFILE") return await this.renameProfile(request.profileId, request.name);
-      if (request.type === "DELETE_PROFILE") return await this.deleteProfile(request.profileId);
+      if (request.type === "CREATE_PROFILE") return await this.createProfile(request.name, state, currentTime);
+      if (request.type === "SELECT_PROFILE") return await this.selectProfile(request.profileId, state);
+      if (request.type === "RENAME_PROFILE") return await this.renameProfile(request.profileId, request.name, state, currentTime);
+      if (request.type === "DELETE_PROFILE") return await this.deleteProfile(request.profileId, state);
       if (request.type === "ADD_BLOCKED_HOST") {
-        return await this.addBlockedHost(request.profileId, request.input, request.confirmConsolidation === true);
+        return await this.addBlockedHost(
+          request.profileId,
+          request.input,
+          request.confirmConsolidation === true,
+          state,
+          currentTime
+        );
       }
       if (request.type === "REMOVE_BLOCKED_HOST") {
-        return await this.removeBlockedHost(request.profileId, request.canonicalHost);
+        return await this.removeBlockedHost(request.profileId, request.canonicalHost, state, currentTime);
       }
-      if (request.type === "BLOCK_CURRENT_SITE") return await this.blockCurrentSite(request.url);
-      if (request.type === "SET_HOSTNAME") return await this.setHostnameCompatibility(request.hostname);
+      if (request.type === "BLOCK_CURRENT_SITE") return await this.blockCurrentSite(request.url, state, currentTime);
+      if (request.type === "SET_HOSTNAME") return await this.setHostnameCompatibility(request.hostname, state, currentTime);
       if (request.type === "START_SESSION") {
-        return await this.startSession(request.profileId, request.durationMinutes);
+        return await this.startSession(request.profileId, request.durationMinutes, state, currentTime);
       }
-      if (request.type === "CANCEL_SESSION") return await this.cancelSession();
+      if (request.type === "CANCEL_SESSION") return await this.cancelSession(state, currentTime);
       return { ok: false, error: "STORAGE_ERROR" };
     } catch {
       return { ok: false, error: "STORAGE_ERROR" };
     }
   }
 
-  private async exportConfiguration(): Promise<BackgroundResponse<ExportConfigurationData>> {
+  private async exportConfiguration(
+    state: ExtensionState,
+    currentTime: number
+  ): Promise<BackgroundResponse<ExportConfigurationData>> {
+    return { ok: true, data: serializeConfigurationBackup(state.configuration, currentTime) };
+  }
+
+  private async readAndReconcile(): Promise<{ state: ExtensionState; currentTime: number }> {
     const currentTime = this.now();
     const state = await this.store.read(currentTime);
     await this.reconcileState(state);
-    return { ok: true, data: serializeConfigurationBackup(state.configuration, currentTime) };
+    return { state, currentTime };
   }
 
   private async importConfiguration(
     content: string,
-    expectedCurrentConfiguration: StoredConfiguration
+    expectedCurrentConfiguration: StoredConfiguration,
+    state: ExtensionState
   ): Promise<BackgroundResponse<ExtensionState>> {
     let imported: StoredConfiguration;
     try {
@@ -222,7 +282,6 @@ export class BackgroundService {
       throw error;
     }
 
-    const state = await this.currentState();
     if (state.activeSession) return { ok: false, error: "IMPORT_SESSION_ACTIVE" };
     if (!deeplyEqual(state.configuration, expectedCurrentConfiguration)) {
       return { ok: false, error: "CONFIGURATION_CHANGED" };
@@ -233,26 +292,16 @@ export class BackgroundService {
   }
 
   public handleAlarm(name: string): Promise<void> {
-    const response = this.requestQueue.then(() => this.reconcileAlarm(name));
-    this.requestQueue = response.then(
-      () => undefined,
-      () => undefined
-    );
-    return response;
+    return this.enqueue(() => this.reconcileAlarm(name));
   }
 
   private async reconcileAlarm(name: string): Promise<void> {
     if (name !== EXPIRATION_ALARM) return;
     try {
-      const state = await this.store.read(this.now());
-      await this.reconcileState(state);
+      await this.readAndReconcile();
     } catch {
       // A later state read can retry reconciliation without blocking navigation.
     }
-  }
-
-  private async currentState(): Promise<ExtensionState> {
-    return this.store.read(this.now());
   }
 
   private async reconcileSessionResources(state: ExtensionState): Promise<void> {
@@ -310,28 +359,32 @@ export class BackgroundService {
     return { ok: true, data: { ...state, configuration } };
   }
 
-  private async createProfile(name: string): Promise<BackgroundResponse<ExtensionState>> {
+  private async createProfile(
+    name: string,
+    state: ExtensionState,
+    currentTime: number
+  ): Promise<BackgroundResponse<ExtensionState>> {
     if (!validProfileName(name)) return { ok: false, error: "INVALID_PROFILE_NAME" };
-    const state = await this.currentState();
     const trimmed = name.trim();
     if (state.configuration.profiles.some((profile) => nameKey(profile.name) === nameKey(trimmed))) {
       return { ok: false, error: "DUPLICATE_PROFILE_NAME" };
     }
-    const timestamp = this.now();
     const profile: BlockingProfile = {
       id: this.createId(),
       name: trimmed,
       domains: [],
-      createdAt: timestamp,
-      updatedAt: timestamp
+      createdAt: currentTime,
+      updatedAt: currentTime
     };
     const configuration = cloneConfiguration(state.configuration);
     configuration.profiles.push(profile);
     return this.persistConfiguration(state, configuration);
   }
 
-  private async selectProfile(profileId: string): Promise<BackgroundResponse<ExtensionState>> {
-    const state = await this.currentState();
+  private async selectProfile(
+    profileId: string,
+    state: ExtensionState
+  ): Promise<BackgroundResponse<ExtensionState>> {
     if (this.profileOrError(state.configuration, profileId) === "PROFILE_NOT_FOUND") {
       return { ok: false, error: "PROFILE_NOT_FOUND" };
     }
@@ -342,10 +395,11 @@ export class BackgroundService {
 
   private async renameProfile(
     profileId: string,
-    name: string
+    name: string,
+    state: ExtensionState,
+    currentTime: number
   ): Promise<BackgroundResponse<ExtensionState>> {
     if (!validProfileName(name)) return { ok: false, error: "INVALID_PROFILE_NAME" };
-    const state = await this.currentState();
     const profile = this.profileOrError(state.configuration, profileId);
     if (typeof profile === "string") return { ok: false, error: profile };
     if (profileIsLocked(state, profileId)) return { ok: false, error: "PROFILE_IN_SESSION" };
@@ -360,12 +414,14 @@ export class BackgroundService {
     const configuration = cloneConfiguration(state.configuration);
     const next = configuration.profiles.find((candidate) => candidate.id === profileId)!;
     next.name = trimmed;
-    next.updatedAt = this.now();
+    next.updatedAt = currentTime;
     return this.persistConfiguration(state, configuration);
   }
 
-  private async deleteProfile(profileId: string): Promise<BackgroundResponse<ExtensionState>> {
-    const state = await this.currentState();
+  private async deleteProfile(
+    profileId: string,
+    state: ExtensionState
+  ): Promise<BackgroundResponse<ExtensionState>> {
     const profile = this.profileOrError(state.configuration, profileId);
     if (typeof profile === "string") return { ok: false, error: profile };
     if (state.configuration.profiles.length === 1) return { ok: false, error: "LAST_PROFILE" };
@@ -385,21 +441,24 @@ export class BackgroundService {
   private async addBlockedHost(
     profileId: string,
     input: string,
-    confirmConsolidation: boolean
+    confirmConsolidation: boolean,
+    state: ExtensionState,
+    currentTime: number
   ): Promise<BackgroundResponse<ExtensionState>> {
     const normalized = normalizeBlockedHost(input);
     if (!normalized) {
       return { ok: false, error: isProtectedHostInput(input) ? "PROTECTED_HOSTNAME" : "INVALID_HOSTNAME" };
     }
-    return this.addNormalizedHost(profileId, normalized, confirmConsolidation);
+    return this.addNormalizedHost(profileId, normalized, confirmConsolidation, state, currentTime);
   }
 
   private async addNormalizedHost(
     profileId: string,
     normalized: NonNullable<ReturnType<typeof normalizeBlockedHost>>,
-    confirmConsolidation: boolean
+    confirmConsolidation: boolean,
+    state: ExtensionState,
+    currentTime: number
   ): Promise<BackgroundResponse<ExtensionState>> {
-    const state = await this.currentState();
     const profile = this.profileOrError(state.configuration, profileId);
     if (typeof profile === "string") return { ok: false, error: profile };
     if (profileIsLocked(state, profileId)) return { ok: false, error: "PROFILE_IN_SESSION" };
@@ -428,15 +487,16 @@ export class BackgroundService {
       ...nextProfile.domains.filter((host) => !removed.has(host.canonicalHost)),
       { ...analysis.candidate }
     ];
-    nextProfile.updatedAt = this.now();
+    nextProfile.updatedAt = currentTime;
     return this.persistConfiguration(state, configuration);
   }
 
   private async removeBlockedHost(
     profileId: string,
-    canonicalHost: string
+    canonicalHost: string,
+    state: ExtensionState,
+    currentTime: number
   ): Promise<BackgroundResponse<ExtensionState>> {
-    const state = await this.currentState();
     const profile = this.profileOrError(state.configuration, profileId);
     if (typeof profile === "string") return { ok: false, error: profile };
     if (profileIsLocked(state, profileId)) return { ok: false, error: "PROFILE_IN_SESSION" };
@@ -446,14 +506,17 @@ export class BackgroundService {
     const nextProfile = configuration.profiles.find((candidate) => candidate.id === profileId)!;
     nextProfile.domains = nextProfile.domains.filter((host) => host.canonicalHost !== normalized);
     if (nextProfile.domains.length !== profile.domains.length) {
-      nextProfile.updatedAt = this.now();
+      nextProfile.updatedAt = currentTime;
       return this.persistConfiguration(state, configuration);
     }
     return { ok: true, data: state };
   }
 
-  private async blockCurrentSite(url: string): Promise<BackgroundResponse<ExtensionState>> {
-    const state = await this.currentState();
+  private async blockCurrentSite(
+    url: string,
+    state: ExtensionState,
+    currentTime: number
+  ): Promise<BackgroundResponse<ExtensionState>> {
     if (state.activeSession) return { ok: false, error: "SESSION_ALREADY_ACTIVE" };
     const profileId = state.configuration.lastSelectedProfileId;
     const profile = this.profileOrError(state.configuration, profileId);
@@ -462,22 +525,26 @@ export class BackgroundService {
     if (!normalized) {
       return { ok: false, error: isProtectedHostInput(url) ? "PROTECTED_HOSTNAME" : "URL_UNAVAILABLE" };
     }
-    return this.addNormalizedHost(profile.id, normalized, false);
+    return this.addNormalizedHost(profile.id, normalized, false, state, currentTime);
   }
 
-  private async setHostnameCompatibility(input: string): Promise<BackgroundResponse<ExtensionState>> {
+  private async setHostnameCompatibility(
+    input: string,
+    state: ExtensionState,
+    currentTime: number
+  ): Promise<BackgroundResponse<ExtensionState>> {
     if (!input.trim()) return { ok: false, error: "HOSTNAME_REQUIRED" };
     const normalized = normalizeBlockedHost(input);
     if (!normalized || normalized.kind !== "domain") return { ok: false, error: "INVALID_HOSTNAME" };
-    const state = await this.currentState();
-    return this.addNormalizedHost(state.configuration.lastSelectedProfileId, normalized, true);
+    return this.addNormalizedHost(state.configuration.lastSelectedProfileId, normalized, true, state, currentTime);
   }
 
   private async startSession(
     requestedProfileId: string,
-    requestedDurationMinutes: number
+    requestedDurationMinutes: number,
+    state: ExtensionState,
+    currentTime: number
   ): Promise<BackgroundResponse<ExtensionState>> {
-    const state = await this.currentState();
     if (state.activeSession) return { ok: false, error: "SESSION_ALREADY_ACTIVE" };
 
     if (typeof requestedProfileId !== "string" || !requestedProfileId.trim()) {
@@ -500,7 +567,7 @@ export class BackgroundService {
       return { ok: false, error: "PRIVATE_PERMISSION_REQUIRED" };
     }
 
-    const startedAt = this.now();
+    const startedAt = currentTime;
     const activeSession: ActiveSession = {
       schemaVersion: 1,
       id: this.createId(),
@@ -529,12 +596,12 @@ export class BackgroundService {
     return { ok: true, data: nextState };
   }
 
-  private async cancelSession(): Promise<BackgroundResponse<ExtensionState>> {
-    const currentTime = this.now();
-    const state = await this.store.read(currentTime);
+  private async cancelSession(
+    state: ExtensionState,
+    currentTime: number
+  ): Promise<BackgroundResponse<ExtensionState>> {
     const activeSession = state.activeSession;
     if (!activeSession) {
-      if ((await this.store.readPendingCompletionNotifications()).length) await this.reconcileState(state);
       return { ok: false, error: "NO_ACTIVE_SESSION" };
     }
     if (currentTime >= activeSession.cancelAllowedUntil) {

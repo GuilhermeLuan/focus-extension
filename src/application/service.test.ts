@@ -480,7 +480,9 @@ describe("BackgroundService profiles and blocked hosts", () => {
     expect(results.filter((result) => result.ok)).toHaveLength(1);
     expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, error: "SESSION_ALREADY_ACTIVE" }]);
     expect(storage.values.activeSession).toMatchObject({ durationMinutes: 5, profileSnapshot: { id: "focus" } });
-    expect(alarms.create).toHaveBeenCalledTimes(1);
+    // Every valid trigger reconciles derived resources before its command;
+    // the losing start therefore retries the same active-session alarm.
+    expect(alarms.create).toHaveBeenCalledTimes(2);
   });
 
   it("accepts cancellation immediately before the deadline and restores the inactive action", async () => {
@@ -509,12 +511,12 @@ describe("BackgroundService profiles and blocked hosts", () => {
     expect(storage.values.activeSession).toBeUndefined();
     expect(storage.values.configuration).toEqual(configurationBeforeCancellation);
     expect(alarms.clear).toHaveBeenCalledWith("pomodoro-expiration");
-    expect(alarms.clear).toHaveBeenCalledTimes(1);
-    expect(indicator.setActive).toHaveBeenCalledTimes(1);
-    expect(indicator.setInactive).toHaveBeenCalledTimes(1);
+    expect(alarms.clear).toHaveBeenCalledTimes(3);
+    expect(indicator.setActive).toHaveBeenCalledTimes(2);
+    expect(indicator.setInactive).toHaveBeenCalledTimes(3);
   });
 
-  it("rejects cancellation at and after the deadline without removal or effects", async () => {
+  it("rejects cancellation at and after the deadline without removing the session", async () => {
     for (const currentTime of [70_000, 70_001]) {
       const storage = memoryStorage();
       const alarms = { create: vi.fn(async () => undefined), clear: vi.fn(async () => true) };
@@ -534,8 +536,8 @@ describe("BackgroundService profiles and blocked hosts", () => {
       expect(await service.handle({ type: "CANCEL_SESSION" })).toEqual({ ok: false, error: "CANCEL_WINDOW_CLOSED" });
       expect(storage.values.activeSession).toBeDefined();
       expect(storage.writes).toHaveLength(writesBefore);
-      expect(alarms.clear).not.toHaveBeenCalled();
-      expect(indicator.setInactive).not.toHaveBeenCalled();
+      expect(alarms.clear).toHaveBeenCalledTimes(2);
+      expect(indicator.setInactive).toHaveBeenCalledTimes(2);
     }
   });
 
@@ -559,8 +561,8 @@ describe("BackgroundService profiles and blocked hosts", () => {
 
     expect(results.filter((result) => result.ok)).toHaveLength(1);
     expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, error: "NO_ACTIVE_SESSION" }]);
-    expect(alarms.clear).toHaveBeenCalledTimes(1);
-    expect(indicator.setInactive).toHaveBeenCalledTimes(1);
+    expect(alarms.clear).toHaveBeenCalledTimes(4);
+    expect(indicator.setInactive).toHaveBeenCalledTimes(4);
   });
 
   it("keeps cancellation successful and retries derived resources after auxiliary API failures", async () => {
@@ -587,7 +589,7 @@ describe("BackgroundService profiles and blocked hosts", () => {
     expect(await service.handle({ type: "CANCEL_SESSION" })).toMatchObject({ ok: true });
     expect(storage.values.activeSession).toBeUndefined();
     expect(await service.handle({ type: "GET_STATE" })).toMatchObject({ ok: true, data: { configuration: {} } });
-    expect(alarms.clear).toHaveBeenCalledTimes(2);
-    expect(indicator.setInactive).toHaveBeenCalledTimes(2);
+    expect(alarms.clear).toHaveBeenCalledTimes(4);
+    expect(indicator.setInactive).toHaveBeenCalledTimes(4);
   });
 });

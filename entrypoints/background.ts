@@ -1,5 +1,6 @@
 import { browser } from "wxt/browser";
 import { ExistingTabsScanner } from "../src/application/existing-tabs";
+import { registerBackgroundLifecycle } from "../src/application/lifecycle";
 import { NavigationGuard } from "../src/application/navigation";
 import { BackgroundService } from "../src/application/service";
 import type { ActionIndicator } from "../src/application/service";
@@ -54,7 +55,7 @@ export default defineBackground(() => {
   });
   const navigation = new NavigationGuard(() => store.read(), blockedPageUrl);
 
-  void service.handle({ type: "GET_STATE" });
+  registerBackgroundLifecycle(browser.runtime, () => service.reconcile());
 
   browser.runtime.onMessage.addListener((message: unknown) => {
     return service.handle(message as BackgroundRequest);
