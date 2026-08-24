@@ -16,6 +16,10 @@ export type StorageArea = {
 
 export type Clock = () => number;
 
+function isValidDuration(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 5 && value <= 180 && value % 5 === 0;
+}
+
 type LegacyConfiguration = {
   schemaVersion?: unknown;
   profile?: { id?: unknown; name?: unknown; hostname?: unknown };
@@ -42,7 +46,7 @@ function cloneConfiguration(configuration: StoredConfiguration): StoredConfigura
   return {
     schemaVersion: 1,
     lastSelectedProfileId: configuration.lastSelectedProfileId,
-    lastDurationMinutes: 50,
+    lastDurationMinutes: configuration.lastDurationMinutes,
     profiles: configuration.profiles.map((profile) => ({
       id: profile.id,
       name: profile.name,
@@ -79,7 +83,7 @@ function isConfiguration(value: unknown): value is StoredConfiguration {
   return (
     value.schemaVersion === 1 &&
     typeof value.lastSelectedProfileId === "string" &&
-    value.lastDurationMinutes === 50 &&
+    isValidDuration(value.lastDurationMinutes) &&
     Array.isArray(value.profiles) &&
     value.profiles.length > 0 &&
     value.profiles.every(isProfile)
@@ -93,7 +97,7 @@ function isSession(value: unknown): value is ActiveSession {
     typeof value.id === "string" &&
     typeof value.startedAt === "number" &&
     typeof value.endsAt === "number" &&
-    value.durationMinutes === 50 &&
+    isValidDuration(value.durationMinutes) &&
     isRecord(snapshot) &&
     typeof snapshot.id === "string" &&
     typeof snapshot.name === "string" &&
@@ -108,7 +112,7 @@ function cloneSession(session: ActiveSession): ActiveSession {
     id: session.id,
     startedAt: session.startedAt,
     endsAt: session.endsAt,
-    durationMinutes: 50,
+    durationMinutes: session.durationMinutes,
     profileSnapshot: {
       id: session.profileSnapshot.id,
       name: session.profileSnapshot.name,

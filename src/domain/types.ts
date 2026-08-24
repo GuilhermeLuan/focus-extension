@@ -17,7 +17,7 @@ export type BlockingProfile = {
 export type StoredConfiguration = {
   schemaVersion: 1;
   lastSelectedProfileId: string;
-  lastDurationMinutes: 50;
+  lastDurationMinutes: number;
   profiles: BlockingProfile[];
 };
 
@@ -26,7 +26,7 @@ export type ActiveSession = {
   id: string;
   startedAt: number;
   endsAt: number;
-  durationMinutes: 50;
+  durationMinutes: number;
   profileSnapshot: {
     id: string;
     name: string;
@@ -58,9 +58,18 @@ export type BackgroundRequest =
     }
   | { type: "REMOVE_BLOCKED_HOST"; profileId: string; canonicalHost: string }
   | { type: "BLOCK_CURRENT_SITE"; url: string }
-  | { type: "START_SESSION" }
+  | { type: "START_SESSION"; profileId: string; durationMinutes: number }
   // Kept as a compatibility shim for the #1 popup. New screens do not send it.
   | { type: "SET_HOSTNAME"; hostname: string };
+
+export type StartSessionError =
+  | "PROFILE_REQUIRED"
+  | "PROFILE_NOT_FOUND"
+  | "PROFILE_EMPTY"
+  | "INVALID_DURATION"
+  | "SESSION_ALREADY_ACTIVE"
+  | "PRIVATE_PERMISSION_REQUIRED"
+  | "STORAGE_ERROR";
 
 export type BackgroundError =
   | "INVALID_PROFILE_NAME"
@@ -74,9 +83,7 @@ export type BackgroundError =
   | "HOST_ALREADY_COVERED"
   | "CONFIRM_CONSOLIDATION"
   | "URL_UNAVAILABLE"
-  | "SESSION_ALREADY_ACTIVE"
-  | "PROFILE_EMPTY"
-  | "STORAGE_ERROR";
+  | StartSessionError;
 
 export type ConsolidationDetails = {
   candidate: BlockedHost;

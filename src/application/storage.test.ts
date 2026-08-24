@@ -76,4 +76,39 @@ describe("StateStore", () => {
     await store.read();
     expect(storage.writes).toHaveLength(1);
   });
+
+  it("round-trips valid configurable durations for configuration and sessions", async () => {
+    const storage = memoryStorage({
+      configuration: {
+        schemaVersion: 1,
+        lastSelectedProfileId: "focus",
+        lastDurationMinutes: 25,
+        profiles: [{
+          id: "focus",
+          name: "Foco",
+          domains: [{ canonicalHost: "example.com", displayHost: "example.com", kind: "domain" }],
+          createdAt: 1,
+          updatedAt: 1
+        }]
+      },
+      activeSession: {
+        schemaVersion: 1,
+        id: "session",
+        startedAt: 1_000,
+        endsAt: 1_501_000,
+        durationMinutes: 25,
+        profileSnapshot: {
+          id: "focus",
+          name: "Foco",
+          domains: [{ canonicalHost: "example.com", displayHost: "example.com", kind: "domain" }]
+        }
+      }
+    });
+
+    const state = await new StateStore(storage, () => 2_000).read();
+
+    expect(state.configuration.lastDurationMinutes).toBe(25);
+    expect(state.activeSession?.durationMinutes).toBe(25);
+    expect(storage.writes).toHaveLength(0);
+  });
 });

@@ -1,8 +1,8 @@
 # Issue #3 — Início configurável e deliberado de um Pomodoro
 
 - **Issue:** [#3 — Configure and deliberately start one Pomodoro](https://github.com/GuilhermeLuan/focus-extension/issues/3)
-- **Status:** especificação de implementação
-- **Dependência obrigatória:** #2 — perfis e hostnames canônicos
+- **Status:** refinada e pronta para implementação
+- **Dependência obrigatória:** #2 — perfis e hostnames canônicos (satisfeita por `ac7e0ae`)
 - **Método:** TDD em fatias verticais, com o background como autoridade
 
 ## 1. Resultado esperado
@@ -13,7 +13,7 @@ O background não confia no popup: serializa comandos, relê o estado persistido
 
 ## 2. Pré-condição e limite da issue
 
-A implementação começa somente depois de #2 estar integrada no branch, oferecendo:
+A issue #2 está integrada no branch por `ac7e0ae` e oferece:
 
 - `StoredConfiguration` com `profiles`, `lastSelectedProfileId` e hostnames canônicos por perfil;
 - ao menos um perfil sempre existente;
@@ -21,7 +21,7 @@ A implementação começa somente depois de #2 estar integrada no branch, oferec
 - lista de hostnames do perfil acessível ao serviço e à UI;
 - navegação baseada no snapshot da sessão, não na configuração mutável.
 
-O `main` no momento desta spec ainda contém apenas `configuration.profile.hostname` da #1. Absorver a migração para múltiplos perfis nesta issue duplicaria o núcleo de #2, criaria conflitos de merge e tornaria impossível atribuir os testes de CRUD/normalização à issue correta.
+Absorver novas mudanças de CRUD ou normalização nesta issue duplicaria o núcleo de #2 e tornaria impossível atribuir os testes às issues corretas.
 
 ## 3. Alternativas consideradas
 

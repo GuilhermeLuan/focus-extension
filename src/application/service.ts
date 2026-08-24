@@ -19,6 +19,7 @@ export type ServiceOptions = {
   now?: Clock;
   createId?: () => string;
   alarms?: AlarmScheduler;
+  isAllowedIncognitoAccess?: () => Promise<boolean>;
 };
 
 export type AlarmScheduler = {
@@ -67,6 +68,7 @@ export class BackgroundService {
   private readonly now: Clock;
   private readonly createId: () => string;
   private readonly alarms: AlarmScheduler;
+  private readonly isAllowedIncognitoAccess: () => Promise<boolean>;
   private requestQueue: Promise<void> = Promise.resolve();
 
   public constructor(
@@ -76,6 +78,7 @@ export class BackgroundService {
     this.now = options.now ?? (() => Date.now());
     this.createId = options.createId ?? (() => crypto.randomUUID());
     this.alarms = options.alarms ?? noAlarms;
+    this.isAllowedIncognitoAccess = options.isAllowedIncognitoAccess ?? (async () => true);
   }
 
   public handle(request: BackgroundRequest): Promise<BackgroundResponse<ExtensionState>> {
@@ -102,7 +105,9 @@ export class BackgroundService {
       }
       if (request.type === "BLOCK_CURRENT_SITE") return await this.blockCurrentSite(request.url);
       if (request.type === "SET_HOSTNAME") return await this.setHostnameCompatibility(request.hostname);
-      if (request.type === "START_SESSION") return await this.startSession();
+      if (request.type === "START_SESSION") {
+        return await this.startSession(request.profileId, request.durationMinutes);
+      }
       return { ok: false, error: "STORAGE_ERROR" };
     } catch {
       return { ok: false, error: "STORAGE_ERROR" };
@@ -305,20 +310,40 @@ export class BackgroundService {
     return this.addNormalizedHost(state.configuration.lastSelectedProfileId, normalized, true);
   }
 
-  private async startSession(): Promise<BackgroundResponse<ExtensionState>> {
+  private async startSession(
+    requestedProfileId: string,
+    requestedDurationMinutes: number
+  ): Promise<BackgroundResponse<ExtensionState>> {
     const state = await this.currentState();
     if (state.activeSession) return { ok: false, error: "SESSION_ALREADY_ACTIVE" };
-    const profile = this.profileOrError(state.configuration, state.configuration.lastSelectedProfileId);
+
+    if (typeof requestedProfileId !== "string" || !requestedProfileId.trim()) {
+      return { ok: false, error: "PROFILE_REQUIRED" };
+    }
+    const profile = this.profileOrError(state.configuration, requestedProfileId);
     if (typeof profile === "string") return { ok: false, error: profile };
     if (!profile.domains.length) return { ok: false, error: "PROFILE_EMPTY" };
+
+    const durationMinutes = requestedDurationMinutes;
+    if (
+      !Number.isInteger(durationMinutes) ||
+      durationMinutes < 5 ||
+      durationMinutes > 180 ||
+      durationMinutes % 5 !== 0
+    ) {
+      return { ok: false, error: "INVALID_DURATION" };
+    }
+    if (!(await this.isAllowedIncognitoAccess())) {
+      return { ok: false, error: "PRIVATE_PERMISSION_REQUIRED" };
+    }
 
     const startedAt = this.now();
     const activeSession: ActiveSession = {
       schemaVersion: 1,
       id: this.createId(),
       startedAt,
-      endsAt: startedAt + 50 * 60_000,
-      durationMinutes: 50,
+      endsAt: startedAt + durationMinutes * 60_000,
+      durationMinutes,
       profileSnapshot: {
         id: profile.id,
         name: profile.name,
@@ -326,7 +351,11 @@ export class BackgroundService {
       }
     };
     await this.store.saveSession(activeSession);
+    const configuration = cloneConfiguration(state.configuration);
+    configuration.lastSelectedProfileId = profile.id;
+    configuration.lastDurationMinutes = durationMinutes;
+    await this.store.saveConfiguration(configuration);
     await this.alarms.create(EXPIRATION_ALARM, { when: activeSession.endsAt });
-    return { ok: true, data: { ...state, activeSession } };
+    return { ok: true, data: { configuration, activeSession } };
   }
 }

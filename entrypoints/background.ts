@@ -16,7 +16,10 @@ const alarms = {
 };
 
 const store = new StateStore(storage);
-const service = new BackgroundService(store, { alarms });
+const service = new BackgroundService(store, {
+  alarms,
+  isAllowedIncognitoAccess: () => browser.extension.isAllowedIncognitoAccess()
+});
 
 export default defineBackground(() => {
   const blockedPageUrl = browser.runtime.getURL("blocked.html" as never);
